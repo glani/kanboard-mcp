@@ -4,6 +4,8 @@
 
 A powerful Go-based MCP server that enables seamless integration between AI assistants (like Claude Desktop, Cursor) and Kanboard project management system. Manage your Kanboard projects, tasks, users, and workflows directly through natural language commands.
 
+![Kanboard MCP Server Demo](new-project.gif)
+
 ![Go](https://img.shields.io/badge/Go-1.21+-blue?style=for-the-badge&logo=go)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 ![MCP](https://img.shields.io/badge/MCP-Protocol-orange?style=for-the-badge)
