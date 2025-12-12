@@ -5,6 +5,10 @@
 *.so
 *.dylib
 
+# Kanboard MCP binaries
+kanboard-mcp
+kanboard-mcp-*
+
 # Test binary, built with `go test -c`
 *.test
 
