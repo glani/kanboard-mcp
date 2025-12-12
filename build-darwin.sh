@@ -86,7 +86,9 @@ rm -f kanboard-mcp kanboard-mcp-*
 
 # Set build flags for optimization
 LDFLAGS="-s -w"
-BUILD_SUCCESS=0
+
+# Temporarily disable set -e to capture build command exit codes
+set +e
 
 if [[ "$ARCH" == "arm64" ]]; then
     echo "🍎 Building for Apple Silicon (ARM64)..."
@@ -101,6 +103,9 @@ else
     go build -ldflags="$LDFLAGS" -o kanboard-mcp .
     BUILD_SUCCESS=$?
 fi
+
+# Re-enable set -e for subsequent commands
+set -e
 
 # Check if build was successful
 if [ $BUILD_SUCCESS -eq 0 ]; then
