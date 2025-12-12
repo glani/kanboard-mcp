@@ -25,13 +25,6 @@ check_and_install_go() {
 
         if brew install go; then
             echo "✅ Go installed successfully via Homebrew"
-
-            # Add Go to PATH for current session if needed
-            if [[ ":$PATH:" != *":/opt/homebrew/bin:"* ]] && [[ ":$PATH:" != *":/usr/local/bin:"* ]]; then
-                echo "🔧 Adding Go to PATH..."
-                export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-            fi
-
             return 0
         else
             echo "❌ Failed to install Go via Homebrew"
@@ -57,6 +50,24 @@ check_and_install_go() {
 if ! check_and_install_go; then
     echo "❌ Cannot proceed without Go. Please install Go and try again."
     exit 1
+fi
+
+# Ensure Go is accessible in PATH after potential installation
+if ! command -v go >/dev/null 2>&1; then
+    echo "🔧 Go was installed but not found in PATH, updating PATH..."
+    # Add common Homebrew Go locations to PATH
+    if [[ ":$PATH:" != *":/opt/homebrew/bin:"* ]]; then
+        export PATH="/opt/homebrew/bin:$PATH"
+    fi
+    if [[ ":$PATH:" != *":/usr/local/bin:"* ]]; then
+        export PATH="/usr/local/bin:$PATH"
+    fi
+
+    # Final verification
+    if ! command -v go >/dev/null 2>&1; then
+        echo "❌ Go is still not accessible. You may need to restart your terminal."
+        exit 1
+    fi
 fi
 
 # Get system information
