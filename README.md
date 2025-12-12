@@ -74,14 +74,71 @@ We recommend using [mcpproxy](https://github.com/bivex/mcpproxy) as a proxy solu
 
 ### 1. Environment Variables
 
-Set up your Kanboard credentials using environment variables:
+Set up your Kanboard credentials and RBAC permissions using environment variables:
 
+#### Required Credentials:
 ```bash
 export KANBOARD_API_ENDPOINT="https://your-kanboard-url/jsonrpc.php"
 export KANBOARD_API_KEY="your-kanboard-api-key"
 export KANBOARD_USERNAME="your-kanboard-username"
 export KANBOARD_PASSWORD="your-kanboard-password"
 ```
+
+#### RBAC Configuration (Optional):
+Configure user roles for proper access control. If not set, the system will try to get roles from Kanboard API, falling back to `app-user` role.
+
+```bash
+# Application-level roles (comma-separated)
+# If not set, roles are automatically retrieved from Kanboard API
+export KANBOARD_USER_APP_ROLES="app-manager"
+
+# Project-specific roles (format: "project_id:role,project_id:role")
+# If not set, project roles are automatically retrieved from Kanboard API
+export KANBOARD_USER_PROJECT_ROLES="1:project-manager,2:project-member"
+
+# Debug mode - shows detailed permission checking logs
+export KANBOARD_DEBUG="true"
+
+# Skip RBAC checks for debugging (use with caution!)
+export KANBOARD_SKIP_RBAC="false"
+```
+
+**Available Application Roles:**
+- `app-admin` - Full system administrator access
+- `app-manager` - Can create projects and manage users
+- `app-user` - Basic user access (default)
+
+**Available Project Roles:**
+- `project-manager` - Full project management access
+- `project-member` - Can create/modify tasks and comments
+- `project-viewer` - Read-only access to project
+
+**🔧 Troubleshooting RBAC Issues:**
+
+If you're getting "access denied" errors:
+
+1. **Check your user role in Kanboard:**
+   - Go to Kanboard web interface
+   - Check your user profile/role settings
+   - Ensure you have appropriate permissions
+
+2. **Enable debug logging:**
+   ```bash
+   export KANBOARD_DEBUG="true"
+   ```
+   This will show your current roles and permission checks in the console.
+
+3. **Temporarily skip RBAC for testing:**
+   ```bash
+   export KANBOARD_SKIP_RBAC="true"
+   ```
+   ⚠️ **Warning:** Only use for debugging! Disables all permission checks.
+
+4. **Manually set roles via environment:**
+   ```bash
+   export KANBOARD_USER_APP_ROLES="app-admin"
+   export KANBOARD_USER_PROJECT_ROLES="27:project-manager"
+   ```
 
 ### 2. MCP Client Configuration
 
@@ -102,7 +159,9 @@ Create the MCP configuration file for your client:
         "KANBOARD_API_ENDPOINT": "https://your-kanboard-url/jsonrpc.php",
         "KANBOARD_API_KEY": "your-kanboard-api-key",
         "KANBOARD_USERNAME": "your-kanboard-username",
-        "KANBOARD_PASSWORD": "your-kanboard-password"
+        "KANBOARD_PASSWORD": "your-kanboard-password",
+        "KANBOARD_USER_APP_ROLES": "app-manager",
+        "KANBOARD_USER_PROJECT_ROLES": "1:project-manager"
       }
     }
   }

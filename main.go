@@ -17,6 +17,720 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
+// RBAC Configuration embedded as JSON
+const rbacConfigJSON = `{
+    "roles": {
+        "application_roles": {
+            "app-admin": "Administrator",
+            "app-manager": "Manager",
+            "app-user": "User"
+        },
+        "project_roles": {
+            "project-manager": "Project Manager",
+            "project-member": "Project Member",
+            "project-viewer": "Project Viewer"
+        },
+        "all_roles": {
+            "app-admin": "Administrator",
+            "app-manager": "Manager",
+            "app-user": "User",
+            "project-manager": "Project Manager",
+            "project-member": "Project Member",
+            "project-viewer": "Project Viewer"
+        }
+    },
+    "hierarchies": {
+        "application": {
+            "app-admin": [
+                "app-manager",
+                "app-user",
+                "app-public"
+            ],
+            "app-manager": [
+                "app-user",
+                "app-public"
+            ],
+            "app-user": [
+                "app-public"
+            ]
+        },
+        "project": {
+            "project-manager": [
+                "project-member",
+                "project-viewer"
+            ],
+            "project-member": [
+                "project-viewer"
+            ]
+        }
+    },
+    "access_maps": {
+        "project": {
+            "default_role": "project-viewer",
+            "rules": {
+                "actioncontroller": {
+                    "*": "project-manager"
+                },
+                "projectactionduplicationcontroller": {
+                    "*": "project-manager"
+                },
+                "actioncreationcontroller": {
+                    "*": "project-manager"
+                },
+                "analyticcontroller": {
+                    "*": "project-manager"
+                },
+                "boardajaxcontroller": {
+                    "save": "project-member"
+                },
+                "boardpopovercontroller": {
+                    "*": "project-member"
+                },
+                "taskpopovercontroller": {
+                    "*": "project-member"
+                },
+                "calendarcontroller": {
+                    "save": "project-member"
+                },
+                "categorycontroller": {
+                    "*": "project-manager"
+                },
+                "columncontroller": {
+                    "*": "project-manager"
+                },
+                "commentcontroller": {
+                    "create": "project-member",
+                    "save": "project-member",
+                    "edit": "project-member",
+                    "update": "project-member",
+                    "confirm": "project-member",
+                    "remove": "project-member"
+                },
+                "commentlistcontroller": {
+                    "save": "project-member"
+                },
+                "commentmailcontroller": {
+                    "*": "project-member"
+                },
+                "customfiltercontroller": {
+                    "*": "project-member"
+                },
+                "exportcontroller": {
+                    "*": "project-manager"
+                },
+                "taskfilecontroller": {
+                    "screenshot": "project-member",
+                    "create": "project-member",
+                    "save": "project-member",
+                    "remove": "project-member",
+                    "confirm": "project-member"
+                },
+                "projectviewcontroller": {
+                    "share": "project-manager",
+                    "updatesharing": "project-manager",
+                    "integrations": "project-manager",
+                    "updateintegrations": "project-manager",
+                    "notifications": "project-manager",
+                    "updatenotifications": "project-manager",
+                    "duplicate": "project-manager",
+                    "doduplication": "project-manager"
+                },
+                "projectpermissioncontroller": {
+                    "*": "project-manager"
+                },
+                "projecteditcontroller": {
+                    "*": "project-manager"
+                },
+                "projectpredefinedcontentcontroller": {
+                    "*": "project-manager"
+                },
+                "predefinedtaskdescriptioncontroller": {
+                    "*": "project-manager"
+                },
+                "projectfilecontroller": {
+                    "*": "project-member"
+                },
+                "projectuseroverviewcontroller": {
+                    "*": "project-manager"
+                },
+                "projectstatuscontroller": {
+                    "*": "project-manager"
+                },
+                "projecttagcontroller": {
+                    "*": "project-manager"
+                },
+                "subtaskcontroller": {
+                    "*": "project-member"
+                },
+                "subtaskconvertercontroller": {
+                    "*": "project-member"
+                },
+                "subtaskrestrictioncontroller": {
+                    "*": "project-member"
+                },
+                "subtaskstatuscontroller": {
+                    "*": "project-member"
+                },
+                "swimlanecontroller": {
+                    "*": "project-manager"
+                },
+                "tasksuppressioncontroller": {
+                    "*": "project-member"
+                },
+                "taskcreationcontroller": {
+                    "*": "project-member"
+                },
+                "taskbulkcontroller": {
+                    "*": "project-member"
+                },
+                "taskbulkmovecolumncontroller": {
+                    "*": "project-member"
+                },
+                "taskbulkchangepropertycontroller": {
+                    "*": "project-member"
+                },
+                "taskduplicationcontroller": {
+                    "*": "project-member"
+                },
+                "taskrecurrencecontroller": {
+                    "*": "project-member"
+                },
+                "taskimportcontroller": {
+                    "*": "project-manager"
+                },
+                "taskinternallinkcontroller": {
+                    "*": "project-member"
+                },
+                "taskexternallinkcontroller": {
+                    "*": "project-member"
+                },
+                "taskmodificationcontroller": {
+                    "*": "project-member"
+                },
+                "taskstatuscontroller": {
+                    "*": "project-member"
+                },
+                "taskmailcontroller": {
+                    "*": "project-member"
+                },
+                "userajaxcontroller": {
+                    "mention": "project-member"
+                }
+            }
+        },
+        "application": {
+            "default_role": "app-user",
+            "rules": {
+                "authcontroller": {
+                    "login": "app-public",
+                    "check": "app-public"
+                },
+                "captchacontroller": {
+                    "*": "app-public"
+                },
+                "passwordresetcontroller": {
+                    "*": "app-public"
+                },
+                "taskviewcontroller": {
+                    "readonly": "app-public"
+                },
+                "boardviewcontroller": {
+                    "readonly": "app-public"
+                },
+                "icalendarcontroller": {
+                    "*": "app-public"
+                },
+                "feedcontroller": {
+                    "*": "app-public"
+                },
+                "avatarfilecontroller": {
+                    "show": "app-public",
+                    "image": "app-public"
+                },
+                "userinvitecontroller": {
+                    "signup": "app-public",
+                    "register": "app-public"
+                },
+                "cronjobcontroller": {
+                    "run": "app-public"
+                },
+                "configcontroller": {
+                    "*": "app-admin"
+                },
+                "tagcontroller": {
+                    "*": "app-admin"
+                },
+                "plugincontroller": {
+                    "*": "app-admin"
+                },
+                "currencycontroller": {
+                    "*": "app-admin"
+                },
+                "grouplistcontroller": {
+                    "*": "app-admin"
+                },
+                "groupcreationcontroller": {
+                    "*": "app-admin"
+                },
+                "groupmodificationcontroller": {
+                    "*": "app-admin"
+                },
+                "linkcontroller": {
+                    "*": "app-admin"
+                },
+                "projectcreationcontroller": {
+                    "create": "app-manager"
+                },
+                "projectuseroverviewcontroller": {
+                    "*": "app-manager"
+                },
+                "twofactorcontroller": {
+                    "disable": "app-admin"
+                },
+                "userimportcontroller": {
+                    "*": "app-admin"
+                },
+                "usercreationcontroller": {
+                    "*": "app-admin"
+                },
+                "userlistcontroller": {
+                    "*": "app-admin"
+                },
+                "userstatuscontroller": {
+                    "*": "app-admin"
+                },
+                "usercredentialcontroller": {
+                    "changeauthentication": "app-admin",
+                    "saveauthentication": "app-admin",
+                    "unlock": "app-admin"
+                }
+            }
+        },
+        "api": {
+            "default_role": "app-user",
+            "rules": {
+                "userprocedure": {
+                    "*": "app-admin"
+                },
+                "groupmemberprocedure": {
+                    "*": "app-admin"
+                },
+                "groupprocedure": {
+                    "*": "app-admin"
+                },
+                "linkprocedure": {
+                    "*": "app-admin"
+                },
+                "taskprocedure": {
+                    "getoverduetasks": "app-admin"
+                },
+                "projectprocedure": {
+                    "getallprojects": "app-admin",
+                    "createproject": "app-manager"
+                }
+            }
+        },
+        "api_project": {
+            "default_role": "project-viewer",
+            "rules": {
+                "actionprocedure": {
+                    "removeaction": "project-manager",
+                    "getactions": "project-manager",
+                    "createaction": "project-manager"
+                },
+                "categoryprocedure": {
+                    "removecategory": "project-manager",
+                    "createcategory": "project-manager",
+                    "updatecategory": "project-manager"
+                },
+                "columnprocedure": {
+                    "updatecolumn": "project-manager",
+                    "addcolumn": "project-manager",
+                    "removecolumn": "project-manager",
+                    "changecolumnposition": "project-manager"
+                },
+                "commentprocedure": {
+                    "removecomment": "project-member",
+                    "createcomment": "project-member",
+                    "updatecomment": "project-member"
+                },
+                "projectpermissionprocedure": {
+                    "addprojectuser": "project-manager",
+                    "addprojectgroup": "project-manager",
+                    "removeprojectuser": "project-manager",
+                    "removeprojectgroup": "project-manager",
+                    "changeprojectuserrole": "project-manager",
+                    "changeprojectgrouprole": "project-manager"
+                },
+                "projectprocedure": {
+                    "updateproject": "project-manager",
+                    "removeproject": "project-manager",
+                    "enableproject": "project-manager",
+                    "disableproject": "project-manager",
+                    "enableprojectpublicaccess": "project-manager",
+                    "disableprojectpublicaccess": "project-manager"
+                },
+                "subtaskprocedure": {
+                    "removesubtask": "project-member",
+                    "createsubtask": "project-member",
+                    "updatesubtask": "project-member"
+                },
+                "subtasktimetrackingprocedure": {
+                    "setsubtaskstarttime": "project-member",
+                    "setsubtaskendtime": "project-member"
+                },
+                "swimlaneprocedure": {
+                    "addswimlane": "project-manager",
+                    "updateswimlane": "project-manager",
+                    "removeswimlane": "project-manager",
+                    "disableswimlane": "project-manager",
+                    "enableswimlane": "project-manager",
+                    "changeswimlaneposition": "project-manager"
+                },
+                "projectfileprocedure": {
+                    "createprojectfile": "project-member",
+                    "removeprojectfile": "project-member",
+                    "removeallprojectfiles": "project-member"
+                },
+                "taskfileprocedure": {
+                    "createtaskfile": "project-member",
+                    "removetaskfile": "project-member",
+                    "removealltaskfiles": "project-member"
+                },
+                "tasklinkprocedure": {
+                    "createtasklink": "project-member",
+                    "updatetasklink": "project-member",
+                    "removetasklink": "project-member"
+                },
+                "taskexternallinkprocedure": {
+                    "createexternaltasklink": "project-member",
+                    "updateexternaltasklink": "project-member",
+                    "removeexternaltasklink": "project-member"
+                },
+                "taskprocedure": {
+                    "opentask": "project-member",
+                    "closetask": "project-member",
+                    "removetask": "project-member",
+                    "movetaskposition": "project-member",
+                    "movetasktoproject": "project-member",
+                    "duplicatetasktoproject": "project-member",
+                    "createtask": "project-member",
+                    "updatetask": "project-member"
+                },
+                "tasktagprocedure": {
+                    "settasktags": "project-member"
+                },
+                "tagprocedure": {
+                    "createtag": "project-member",
+                    "updatetag": "project-member",
+                    "removetag": "project-member"
+                }
+            }
+        }
+    }
+}`
+
+// RBAC Data Structures
+type RBACConfig struct {
+	Roles       RolesConfig       `json:"roles"`
+	Hierarchies HierarchiesConfig `json:"hierarchies"`
+	AccessMaps  AccessMapsConfig  `json:"access_maps"`
+}
+
+type RolesConfig struct {
+	ApplicationRoles map[string]string `json:"application_roles"`
+	ProjectRoles     map[string]string `json:"project_roles"`
+	AllRoles         map[string]string `json:"all_roles"`
+}
+
+type HierarchiesConfig struct {
+	Application map[string][]string `json:"application"`
+	Project     map[string][]string `json:"project"`
+}
+
+type AccessMapsConfig struct {
+	Project     AccessMapConfig `json:"project"`
+	Application AccessMapConfig `json:"application"`
+	API         AccessMapConfig `json:"api"`
+	APIProject  AccessMapConfig `json:"api_project"`
+}
+
+type AccessMapConfig struct {
+	DefaultRole string                 `json:"default_role"`
+	Rules       map[string]map[string]string `json:"rules"`
+}
+
+// UserContext holds information about the current user and their permissions
+type UserContext struct {
+	UserID      int                 `json:"user_id"`
+	Username    string              `json:"username"`
+	AppRoles    []string            `json:"app_roles"`
+	ProjectRoles map[int]string     `json:"project_roles"` // project_id -> role
+	IsAdmin     bool                `json:"is_admin"`
+}
+
+// PermissionCheck represents a permission check request
+type PermissionCheck struct {
+	UserID    int    `json:"user_id"`
+	ProjectID *int   `json:"project_id,omitempty"` // nil for application-level permissions
+	Procedure string `json:"procedure"`
+	Method    string `json:"method"`
+}
+
+// RBACManager handles role-based access control
+type RBACManager struct {
+	config *RBACConfig
+}
+
+// NewRBACManager creates a new RBAC manager with the embedded configuration
+func NewRBACManager() (*RBACManager, error) {
+	var config RBACConfig
+	if err := json.Unmarshal([]byte(rbacConfigJSON), &config); err != nil {
+		return nil, fmt.Errorf("failed to parse RBAC config: %w", err)
+	}
+	return &RBACManager{config: &config}, nil
+}
+
+// CheckPermission checks if a user has permission for a specific procedure/method
+func (rbac *RBACManager) CheckPermission(userCtx *UserContext, projectID *int, procedure, method string) bool {
+	// Get the appropriate access map
+	var accessMap AccessMapConfig
+	var userRole string
+
+	if projectID != nil {
+		// Project-level permission check
+		accessMap = rbac.config.AccessMaps.APIProject
+		userRole = userCtx.ProjectRoles[*projectID]
+		if userRole == "" {
+			userRole = accessMap.DefaultRole
+		}
+	} else {
+		// Application-level permission check
+		accessMap = rbac.config.AccessMaps.API
+		// Use highest application role
+		userRole = rbac.getHighestAppRole(userCtx.AppRoles)
+		if userRole == "" {
+			userRole = accessMap.DefaultRole
+		}
+	}
+
+	// Check if the procedure exists in the access map
+	procedureRules, exists := accessMap.Rules[procedure]
+	if !exists {
+		return false
+	}
+
+	// Check specific method or wildcard
+	requiredRole, hasMethod := procedureRules[method]
+	if !hasMethod {
+		requiredRole, hasMethod = procedureRules["*"]
+		if !hasMethod {
+			return false
+		}
+	}
+
+	// Check if user has the required role (considering hierarchy)
+	return rbac.hasRole(userCtx, userRole, requiredRole, projectID != nil)
+}
+
+// getHighestAppRole returns the highest application role from user's roles
+func (rbac *RBACManager) getHighestAppRole(userRoles []string) string {
+	rolePriority := map[string]int{
+		"app-admin":  3,
+		"app-manager": 2,
+		"app-user":   1,
+	}
+
+	highestRole := ""
+	highestPriority := 0
+
+	for _, role := range userRoles {
+		if priority, exists := rolePriority[role]; exists && priority > highestPriority {
+			highestPriority = priority
+			highestRole = role
+		}
+	}
+
+	return highestRole
+}
+
+// hasRole checks if user has the required role considering role hierarchies
+func (rbac *RBACManager) hasRole(userCtx *UserContext, userRole, requiredRole string, isProjectRole bool) bool {
+	if userRole == requiredRole {
+		return true
+	}
+
+	// Check role hierarchy
+	var hierarchy map[string][]string
+	if isProjectRole {
+		hierarchy = rbac.config.Hierarchies.Project
+	} else {
+		hierarchy = rbac.config.Hierarchies.Application
+	}
+
+	// If user has a higher role that includes the required role
+	if inheritedRoles, exists := hierarchy[userRole]; exists {
+		for _, inheritedRole := range inheritedRoles {
+			if inheritedRole == requiredRole {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// GetUserContext retrieves user context (this would typically call Kanboard API)
+func (rbac *RBACManager) GetUserContext(kc *kanboardClient, ctx context.Context) (*UserContext, error) {
+	// Get current user info
+	userInfo, err := kc.callKanboardAPI(ctx, "getMe", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user info: %w", err)
+	}
+
+	userMap, ok := userInfo.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid user info format")
+	}
+
+	userIDFloat, ok := userMap["id"].(float64)
+	if !ok {
+		return nil, fmt.Errorf("invalid user ID format")
+	}
+	userID := int(userIDFloat)
+
+	username, _ := userMap["username"].(string)
+
+	// Get the actual role from Kanboard API response
+	var appRoles []string
+	if roleFromAPI, exists := userMap["role"]; exists && roleFromAPI != nil {
+		if roleStr, ok := roleFromAPI.(string); ok && roleStr != "" {
+			appRoles = []string{roleStr}
+			if os.Getenv("KANBOARD_DEBUG") == "true" {
+				fmt.Fprintf(os.Stderr, "DEBUG: Got role from API: %s\n", roleStr)
+			}
+		}
+	} else if os.Getenv("KANBOARD_DEBUG") == "true" {
+		fmt.Fprintf(os.Stderr, "DEBUG: No 'role' field in getMe response, available fields: ")
+		for k := range userMap {
+			fmt.Fprintf(os.Stderr, "%s ", k)
+		}
+		fmt.Fprintf(os.Stderr, "\n")
+	}
+
+	// If no role from API, fall back to environment variables
+	if len(appRoles) == 0 {
+		appRoles = strings.Split(os.Getenv("KANBOARD_USER_APP_ROLES"), ",")
+		if len(appRoles) == 1 && appRoles[0] == "" {
+			appRoles = []string{"app-user"} // default role
+		}
+	}
+
+	// Clean up roles
+	cleanRoles := make([]string, 0, len(appRoles))
+	for _, role := range appRoles {
+		role = strings.TrimSpace(role)
+		if role != "" {
+			cleanRoles = append(cleanRoles, role)
+		}
+	}
+
+	// Get project roles - try to get from API first, then environment
+	projectRoles := make(map[int]string)
+
+	// Try to get project roles from Kanboard API
+	if userProjects, err := kc.callKanboardAPI(ctx, "getMyProjects", nil); err == nil {
+		if projects, ok := userProjects.([]interface{}); ok {
+			if os.Getenv("KANBOARD_DEBUG") == "true" {
+				fmt.Fprintf(os.Stderr, "DEBUG: Found %d projects in getMyProjects response\n", len(projects))
+			}
+			for _, project := range projects {
+				if projectMap, ok := project.(map[string]interface{}); ok {
+					if projectIDFloat, exists := projectMap["id"]; exists {
+						if projectID, ok := projectIDFloat.(float64); ok {
+							// Try to get user role in this project
+							if role, exists := projectMap["role"]; exists {
+								if roleStr, ok := role.(string); ok {
+									projectRoles[int(projectID)] = roleStr
+									if os.Getenv("KANBOARD_DEBUG") == "true" {
+										fmt.Fprintf(os.Stderr, "DEBUG: Project %d has role: %s\n", int(projectID), roleStr)
+									}
+								}
+							} else if os.Getenv("KANBOARD_DEBUG") == "true" {
+								fmt.Fprintf(os.Stderr, "DEBUG: Project %d has no role field\n", int(projectID))
+							}
+						}
+					}
+				}
+			}
+		}
+	} else if os.Getenv("KANBOARD_DEBUG") == "true" {
+		fmt.Fprintf(os.Stderr, "DEBUG: Failed to get user projects: %v\n", err)
+	}
+
+	// Fall back to environment variables for project roles
+	projectRolesStr := os.Getenv("KANBOARD_USER_PROJECT_ROLES")
+	if projectRolesStr != "" {
+		// Format: "project_id:role,project_id:role"
+		pairs := strings.Split(projectRolesStr, ",")
+		for _, pair := range pairs {
+			parts := strings.Split(strings.TrimSpace(pair), ":")
+			if len(parts) == 2 {
+				if projectID, err := strconv.Atoi(parts[0]); err == nil {
+					// Only set if not already set from API
+					if _, exists := projectRoles[projectID]; !exists {
+						projectRoles[projectID] = parts[1]
+					}
+				}
+			}
+		}
+	}
+
+	return &UserContext{
+		UserID:       userID,
+		Username:     username,
+		AppRoles:     cleanRoles,
+		ProjectRoles: projectRoles,
+		IsAdmin:      rbac.hasRole(&UserContext{AppRoles: cleanRoles}, rbac.getHighestAppRole(cleanRoles), "app-admin", false),
+	}, nil
+}
+
+// checkPermission is a helper method for kanboardClient to check permissions
+func (kc *kanboardClient) checkPermission(ctx context.Context, projectID *int, procedure, method string) error {
+	// Allow bypassing permission checks for debugging
+	if os.Getenv("KANBOARD_SKIP_RBAC") == "true" {
+		return nil
+	}
+
+	userCtx, err := kc.rbac.GetUserContext(kc, ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get user context: %w", err)
+	}
+
+	// Debug logging
+	if os.Getenv("KANBOARD_DEBUG") == "true" {
+		fmt.Fprintf(os.Stderr, "DEBUG: User %s (ID: %d) roles: app=%v, project=%v\n",
+			userCtx.Username, userCtx.UserID, userCtx.AppRoles, userCtx.ProjectRoles)
+		fmt.Fprintf(os.Stderr, "DEBUG: Checking permission for %s.%s (projectID: %v)\n",
+			procedure, method, projectID)
+	}
+
+	if !kc.rbac.CheckPermission(userCtx, projectID, procedure, method) {
+		var contextMsg string
+		if projectID != nil {
+			if projectRole, exists := userCtx.ProjectRoles[*projectID]; exists {
+				contextMsg = fmt.Sprintf(" (project role: %s)", projectRole)
+			} else {
+				contextMsg = " (no project role assigned)"
+			}
+		}
+		return fmt.Errorf("access denied: insufficient permissions for %s.%s (user: %s, app roles: %v%s)",
+			procedure, method, userCtx.Username, userCtx.AppRoles, contextMsg)
+	}
+
+	return nil
+}
+
 func main() {
 	// Create a new MCP server
 	s := server.NewMCPServer(
@@ -26,6 +740,13 @@ func main() {
 	)
 
 	var tool mcp.Tool
+
+	// Initialize RBAC manager
+	rbacManager, err := NewRBACManager()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize RBAC manager: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Initialize Kanboard API client
 	apiEndpoint := os.Getenv("KANBOARD_API_ENDPOINT")
@@ -48,7 +769,7 @@ func main() {
 		kbPassword = "your-kanboard-password" // Default or placeholder
 	}
 
-	kbClient := newKanboardClient(apiEndpoint, apiKey, kbUsername, kbPassword)
+	kbClient := newKanboardClient(apiEndpoint, apiKey, kbUsername, kbPassword, rbacManager)
 
 	tool = mcp.NewTool("get_projects",
 		mcp.WithDescription("List all projects"),
@@ -167,6 +888,22 @@ func main() {
 		),
 	)
 	s.AddTool(tool, kbClient.createTaskHandler)
+
+	tool = mcp.NewTool("create_test_task",
+		mcp.WithDescription("Create test task bypassing RBAC checks (for debugging 403 errors)"),
+		mcp.WithString("project_name",
+			mcp.Required(),
+			mcp.Description("Name of the project to create the task in"),
+		),
+		mcp.WithString("title",
+			mcp.Required(),
+			mcp.Description("Title of the task to create"),
+		),
+		mcp.WithString("description",
+			mcp.Description("Description of the task (optional)"),
+		),
+	)
+	s.AddTool(tool, kbClient.createTestTaskHandler)
 
 	tool = mcp.NewTool("update_task",
 		mcp.WithDescription("Update a task"),
@@ -2178,14 +2915,16 @@ type kanboardClient struct {
 	apiKey      string
 	username    string
 	password    string
+	rbac        *RBACManager
 }
 
-func newKanboardClient(apiEndpoint, apiKey, username, password string) *kanboardClient {
+func newKanboardClient(apiEndpoint, apiKey, username, password string, rbac *RBACManager) *kanboardClient {
 	return &kanboardClient{
 		apiEndpoint: apiEndpoint,
 		apiKey:      apiKey,
 		username:    username,
 		password:    password,
+		rbac:        rbac,
 	}
 }
 
@@ -2222,6 +2961,12 @@ func DefaultRequestConfig() *RequestConfig {
 }
 
 func (kc *kanboardClient) callKanboardAPI(ctx context.Context, method string, params interface{}) (interface{}, error) {
+	if os.Getenv("KANBOARD_DEBUG") == "true" {
+		fmt.Fprintf(os.Stderr, "DEBUG: Calling Kanboard API method: %s\n", method)
+		if params != nil {
+			fmt.Fprintf(os.Stderr, "DEBUG: Parameters: %+v\n", params)
+		}
+	}
 	return kc.callKanboardAPIWithConfig(ctx, method, params, DefaultRequestConfig())
 }
 
@@ -2239,7 +2984,7 @@ func (kc *kanboardClient) callKanboardAPIWithConfig(ctx context.Context, method 
 	for attempt := 0; attempt <= config.MaxRetries; attempt++ {
 		if attempt > 0 {
 			if config.EnableLogging {
-				fmt.Printf("Retrying API call to %s (attempt %d/%d)\n", method, attempt+1, config.MaxRetries+1)
+				fmt.Fprintf(os.Stderr, "Retrying API call to %s (attempt %d/%d)\n", method, attempt+1, config.MaxRetries+1)
 			}
 			select {
 			case <-ctx.Done():
@@ -2283,6 +3028,10 @@ func (kc *kanboardClient) executeAPIRequest(ctx context.Context, client *http.Cl
 		return nil, fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
+	if os.Getenv("KANBOARD_DEBUG") == "true" {
+		fmt.Fprintf(os.Stderr, "DEBUG: API Request to %s: %s\n", kc.apiEndpoint, string(jsonBody))
+	}
+
 	// Create HTTP request
 	req, err := http.NewRequestWithContext(ctx, "POST", kc.apiEndpoint, bytes.NewBuffer(jsonBody))
 	if err != nil {
@@ -2296,26 +3045,52 @@ func (kc *kanboardClient) executeAPIRequest(ctx context.Context, client *http.Cl
 
 	// Set authentication
 	if err := kc.setAuthentication(req); err != nil {
+		if os.Getenv("KANBOARD_DEBUG") == "true" {
+			fmt.Fprintf(os.Stderr, "DEBUG: Authentication setup failed: %v\n", err)
+		}
 		return nil, err
 	}
 
+	if os.Getenv("KANBOARD_DEBUG") == "true" {
+		authHeader := req.Header.Get("Authorization")
+		if authHeader != "" {
+			fmt.Fprintf(os.Stderr, "DEBUG: Using authorization header: %s...\n", authHeader[:20])
+		} else {
+			fmt.Fprintf(os.Stderr, "DEBUG: No authorization header set\n")
+		}
+	}
+
 	// Execute request
-	if config.EnableLogging {
-		fmt.Printf("Making API call to %s\n", method)
+	if config.EnableLogging || os.Getenv("KANBOARD_DEBUG") == "true" {
+		fmt.Fprintf(os.Stderr, "Making API call to %s\n", method)
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
+		if os.Getenv("KANBOARD_DEBUG") == "true" {
+			fmt.Fprintf(os.Stderr, "DEBUG: HTTP request failed: %v\n", err)
+		}
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
+
+	if os.Getenv("KANBOARD_DEBUG") == "true" {
+		fmt.Fprintf(os.Stderr, "DEBUG: HTTP response status: %s\n", resp.Status)
+		for key, values := range resp.Header {
+			fmt.Fprintf(os.Stderr, "DEBUG: Response header %s: %v\n", key, values)
+		}
+	}
+
 	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil && config.EnableLogging {
-			fmt.Printf("Warning: failed to close response body: %v\n", closeErr)
+		if closeErr := resp.Body.Close(); closeErr != nil && (config.EnableLogging || os.Getenv("KANBOARD_DEBUG") == "true") {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close response body: %v\n", closeErr)
 		}
 	}()
 
 	// Handle HTTP status errors
 	if err := kc.handleHTTPStatus(resp); err != nil {
+		if os.Getenv("KANBOARD_DEBUG") == "true" {
+			fmt.Fprintf(os.Stderr, "DEBUG: HTTP status error: %v\n", err)
+		}
 		return nil, err
 	}
 
@@ -2362,7 +3137,21 @@ func (kc *kanboardClient) handleHTTPStatus(resp *http.Response) error {
 		return fmt.Errorf("HTTP %d: %s (failed to read response body: %w)", resp.StatusCode, resp.Status, err)
 	}
 
-	return fmt.Errorf("HTTP %d: %s - %s", resp.StatusCode, resp.Status, string(bodyBytes))
+	errorMsg := string(bodyBytes)
+	if os.Getenv("KANBOARD_DEBUG") == "true" {
+		fmt.Fprintf(os.Stderr, "DEBUG: HTTP Error Response Body: %s\n", errorMsg)
+		fmt.Fprintf(os.Stderr, "DEBUG: Response Headers:\n")
+		for key, values := range resp.Header {
+			fmt.Fprintf(os.Stderr, "DEBUG:   %s: %v\n", key, values)
+		}
+	}
+
+	// Provide specific guidance for 403 errors
+	if resp.StatusCode == 403 {
+		return fmt.Errorf("HTTP 403 Forbidden - %s\nPossible causes:\n1. Invalid API key or credentials\n2. API key doesn't have required permissions\n3. User account is disabled or doesn't have access\n4. Project access restrictions\n\nDebug: Enable KANBOARD_DEBUG=true to see detailed auth info", errorMsg)
+	}
+
+	return fmt.Errorf("HTTP %d: %s - %s", resp.StatusCode, resp.Status, errorMsg)
 }
 
 func (kc *kanboardClient) parseAPIResponse(body io.Reader, config *RequestConfig) (interface{}, error) {
@@ -2420,6 +3209,11 @@ func isNonRetryableError(err error) bool {
 }
 
 func (kc *kanboardClient) getProjectsHandler(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Check permission for getting all projects (application-level)
+	if err := kc.checkPermission(ctx, nil, "projectprocedure", "getallprojects"); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
 	result, err := kc.callKanboardAPI(ctx, "getAllProjects", nil)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -2434,6 +3228,11 @@ func (kc *kanboardClient) getProjectsHandler(ctx context.Context, _ mcp.CallTool
 }
 
 func (kc *kanboardClient) createProjectHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Check permission for creating projects (application-level)
+	if err := kc.checkPermission(ctx, nil, "projectprocedure", "createproject"); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
 	name, err := request.RequireString("name")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -2657,6 +3456,17 @@ func (kc *kanboardClient) createTaskHandler(ctx context.Context, request mcp.Cal
 		return mcp.NewToolResultError(fmt.Sprintf("Project '%s' not found or ID is empty", projectName)), nil
 	}
 
+	// Convert projectID to int for permission check
+	projectIDInt, err := strconv.Atoi(projectID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Invalid project ID format: %v", err)), nil
+	}
+
+	// Check permission for creating tasks (project-level)
+	if err := kc.checkPermission(ctx, &projectIDInt, "taskprocedure", "createtask"); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
 	params := map[string]interface{}{
 		"project_id": projectID,
 		"title":      title,
@@ -2763,6 +3573,108 @@ func (kc *kanboardClient) createTaskHandler(ctx context.Context, request mcp.Cal
 	}
 
 	return mcp.NewToolResultText(string(resultBytes)), nil
+}
+
+func (kc *kanboardClient) createTestTaskHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// This handler bypasses RBAC checks for debugging purposes
+	if os.Getenv("KANBOARD_DEBUG") == "true" {
+		fmt.Fprintf(os.Stderr, "DEBUG: createTestTaskHandler called (RBAC bypassed)\n")
+	}
+
+	projectName, err := request.RequireString("project_name")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	title, err := request.RequireString("title")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	// First, get the project ID from the project name
+	result, err := kc.callKanboardAPI(ctx, "getProjectByName", map[string]string{"name": projectName})
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to get project ID: %v", err)), nil
+	}
+
+	// Kanboard API sometimes returns a boolean false or true, or an empty array []
+	// instead of a project object when the project is not found.
+	// We need to handle these cases before attempting to unmarshal into a struct.
+	projectMap, ok := result.(map[string]interface{})
+	if !ok {
+		// If it's not a map, check if it's a boolean (false or true).
+		// Kanboard API might return `false` for not found, or `true` if it's a "success" response without data.
+		if b, isBool := result.(bool); isBool {
+			// If boolean false, it's definitively not found.
+			// If boolean true, and it's not a map, it's also not a valid project object.
+			return mcp.NewToolResultError(fmt.Sprintf("Project '%s' not found or API returned an unexpected boolean value: %v", projectName, b)), nil
+		}
+
+		// If it's not a map and not a boolean, check if it's nil or an empty array.
+		if result == nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Project '%s' not found: API returned nil", projectName)), nil
+		}
+		if arr, isArray := result.([]interface{}); isArray && len(arr) == 0 {
+			return mcp.NewToolResultError(fmt.Sprintf("Project '%s' not found: API returned empty array", projectName)), nil
+		}
+
+		// For any other unexpected type
+		return mcp.NewToolResultError(fmt.Sprintf("Project '%s' not found: API returned unexpected type %T", projectName, result)), nil
+	}
+
+	// If projectMap is empty, treat as not found. (e.g., Kanboard returns {} for not found)
+	if len(projectMap) == 0 {
+		return mcp.NewToolResultError(fmt.Sprintf("Project '%s' not found: API returned empty object", projectName)), nil
+	}
+
+	var projectInfo struct {
+		ID json.RawMessage `json:"id"`
+	}
+	tempBytes, err := json.Marshal(projectMap)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to marshal project info for parsing: %v", err)), nil
+	}
+	if err := json.Unmarshal(tempBytes, &projectInfo); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to parse project info: %v", err)), nil
+	}
+
+	var projectID string
+	var idInt int
+	if err := json.Unmarshal(projectInfo.ID, &idInt); err == nil {
+		projectID = strconv.Itoa(idInt)
+	} else {
+		var idStr string
+		if err := json.Unmarshal(projectInfo.ID, &idStr); err == nil {
+			projectID = idStr
+		} else {
+			return mcp.NewToolResultError(fmt.Sprintf("Project '%s' id is not a valid int or string: %v", projectName, err)), nil
+		}
+	}
+
+	if projectID == "" {
+		return mcp.NewToolResultError(fmt.Sprintf("Project '%s' not found or ID is empty", projectName)), nil
+	}
+
+	params := map[string]interface{}{
+		"project_id": projectID,
+		"title":      title,
+	}
+
+	description := request.GetString("description", "")
+	if description != "" {
+		params["description"] = description
+	}
+
+	result, err = kc.callKanboardAPI(ctx, "createTask", params)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to create test task: %v", err)), nil
+	}
+
+	resultBytes, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to marshal API result: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("Test task created successfully (RBAC bypassed):\n%s", string(resultBytes))), nil
 }
 
 func (kc *kanboardClient) updateTaskHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -2981,6 +3893,11 @@ func (kc *kanboardClient) getUserByNameHandler(ctx context.Context, request mcp.
 }
 
 func (kc *kanboardClient) createUserHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Check permission for creating users (application-level)
+	if err := kc.checkPermission(ctx, nil, "userprocedure", "createuser"); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
 	username, err := request.RequireString("username")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -3551,6 +4468,12 @@ func (kc *kanboardClient) createCategoryHandler(ctx context.Context, request mcp
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Invalid project_id: %v", err)), nil
 	}
+
+	// Check permission for creating categories (project-level)
+	if err := kc.checkPermission(ctx, &projectId, "categoryprocedure", "createcategory"); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
 	name, err := request.RequireString("name")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -3741,6 +4664,29 @@ func (kc *kanboardClient) createCommentHandler(ctx context.Context, request mcp.
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+
+	// Get task information to determine project ID
+	taskInfo, err := kc.callKanboardAPI(ctx, "getTask", map[string]int{"task_id": taskId})
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to get task info: %v", err)), nil
+	}
+
+	taskMap, ok := taskInfo.(map[string]interface{})
+	if !ok {
+		return mcp.NewToolResultError("Invalid task info format"), nil
+	}
+
+	projectIdFloat, ok := taskMap["project_id"].(float64)
+	if !ok {
+		return mcp.NewToolResultError("Invalid project_id in task info"), nil
+	}
+	projectId := int(projectIdFloat)
+
+	// Check permission for creating comments (project-level)
+	if err := kc.checkPermission(ctx, &projectId, "commentprocedure", "createcomment"); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
 	userId, err := request.RequireInt("user_id")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
