@@ -75,19 +75,24 @@ rm -f kanboard-mcp kanboard-mcp-*
 
 # Set build flags for optimization
 LDFLAGS="-s -w"
+BUILD_SUCCESS=0
+
 if [[ "$ARCH" == "arm64" ]]; then
     echo "🍎 Building for Apple Silicon (ARM64)..."
     GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -o kanboard-mcp-arm64 .
+    BUILD_SUCCESS=$?
 elif [[ "$ARCH" == "x86_64" ]]; then
     echo "💻 Building for Intel (AMD64)..."
     GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -o kanboard-mcp-amd64 .
+    BUILD_SUCCESS=$?
 else
     echo "⚠️  Unknown architecture $ARCH, building with default settings..."
     go build -ldflags="$LDFLAGS" -o kanboard-mcp .
+    BUILD_SUCCESS=$?
 fi
 
 # Check if build was successful
-if [ $? -eq 0 ]; then
+if [ $BUILD_SUCCESS -eq 0 ]; then
     echo "✅ Build successful!"
 
     # Show binary information
