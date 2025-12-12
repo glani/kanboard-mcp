@@ -113,6 +113,29 @@ export KANBOARD_SKIP_RBAC="false"
 - `project-member` - Can create/modify tasks and comments
 - `project-viewer` - Read-only access to project
 
+**🔐 Authentication Methods:**
+
+Kanboard supports different authentication methods via `KANBOARD_AUTH_METHOD`:
+
+- **`global_token`** (default): Uses global API token with `jsonrpc:<token>` format
+  ```bash
+  export KANBOARD_API_KEY="5348e6b4846fe09fd1670e922bc13e086f0827d7a66e45815cd7c3a7f67b"
+  export KANBOARD_AUTH_METHOD="global_token"  # or omit (default)
+  ```
+
+- **`user_token`**: Uses user-specific API token with `<username>:<token>` format
+  ```bash
+  export KANBOARD_USERNAME="admin"
+  export KANBOARD_API_KEY="81820aeb3454985b0ac12166225f1f072f523175a752541c8670cf44a032d"
+  export KANBOARD_AUTH_METHOD="user_token"
+  ```
+
+- **`bearer`**: Uses Bearer token authentication
+  ```bash
+  export KANBOARD_API_KEY="your-token-here"
+  export KANBOARD_AUTH_METHOD="bearer"
+  ```
+
 **🔧 Troubleshooting RBAC Issues:**
 
 If you're getting "access denied" errors:

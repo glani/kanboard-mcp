@@ -769,6 +769,16 @@ func main() {
 		kbPassword = "your-kanboard-password" // Default or placeholder
 	}
 
+	// Debug environment variables
+	if os.Getenv("KANBOARD_DEBUG") == "true" {
+		fmt.Fprintf(os.Stderr, "DEBUG: Environment variables loaded:\n")
+		fmt.Fprintf(os.Stderr, "DEBUG: KANBOARD_API_ENDPOINT=%s\n", apiEndpoint)
+		fmt.Fprintf(os.Stderr, "DEBUG: KANBOARD_API_KEY=%s (length: %d)\n", maskAPIKey(apiKey), len(apiKey))
+		fmt.Fprintf(os.Stderr, "DEBUG: KANBOARD_USERNAME=%s\n", kbUsername)
+		fmt.Fprintf(os.Stderr, "DEBUG: KANBOARD_PASSWORD=%s (length: %d)\n", maskPassword(kbPassword), len(kbPassword))
+		fmt.Fprintf(os.Stderr, "DEBUG: KANBOARD_AUTH_METHOD=%s\n", os.Getenv("KANBOARD_AUTH_METHOD"))
+	}
+
 	kbClient := newKanboardClient(apiEndpoint, apiKey, kbUsername, kbPassword, rbacManager)
 
 	tool = mcp.NewTool("get_projects",
@@ -3099,18 +3109,61 @@ func (kc *kanboardClient) executeAPIRequest(ctx context.Context, client *http.Cl
 }
 
 func (kc *kanboardClient) setAuthentication(req *http.Request) error {
+	// Determine authentication method based on available credentials
+	authMethod := strings.ToLower(strings.TrimSpace(os.Getenv("KANBOARD_AUTH_METHOD")))
+
 	// Priority: API key over username/password
 	if kc.isValidAPIKey() {
-		auth := "jsonrpc:" + kc.apiKey
-		basicAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte(auth))
-		req.Header.Set("Authorization", basicAuth)
-		return nil
+		switch authMethod {
+		case "global_token", "":
+			// Default: Global API token (Kanboard application token)
+			// Format: jsonrpc:<global-token>
+			auth := "jsonrpc:" + kc.apiKey
+			basicAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte(auth))
+			req.Header.Set("Authorization", basicAuth)
+			if os.Getenv("KANBOARD_DEBUG") == "true" {
+				fmt.Fprintf(os.Stderr, "DEBUG: Using global API token auth (jsonrpc:token)\n")
+			}
+			return nil
+
+		case "user_token":
+			// User-specific API token (limited access)
+			// Format: <username>:<user-token>
+			if kc.username == "" || kc.username == "your-kanboard-username" {
+				if os.Getenv("KANBOARD_DEBUG") == "true" {
+					fmt.Fprintf(os.Stderr, "DEBUG: KANBOARD_AUTH_METHOD=user_token requires valid KANBOARD_USERNAME\n")
+				}
+				return fmt.Errorf("KANBOARD_AUTH_METHOD=user_token requires KANBOARD_USERNAME to be set")
+			}
+			auth := kc.username + ":" + kc.apiKey
+			basicAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte(auth))
+			req.Header.Set("Authorization", basicAuth)
+			if os.Getenv("KANBOARD_DEBUG") == "true" {
+				fmt.Fprintf(os.Stderr, "DEBUG: Using user-specific API token auth (%s:token)\n", kc.username)
+			}
+			return nil
+
+		case "bearer":
+			// Bearer token authentication
+			req.Header.Set("Authorization", "Bearer "+kc.apiKey)
+			if os.Getenv("KANBOARD_DEBUG") == "true" {
+				fmt.Fprintf(os.Stderr, "DEBUG: Using bearer token auth\n")
+			}
+			return nil
+
+		default:
+			return fmt.Errorf("unsupported KANBOARD_AUTH_METHOD: %s (supported: global_token, user_token, bearer)", authMethod)
+		}
 	}
 
+	// Fallback to username/password authentication
 	if kc.isValidCredentials() {
 		auth := kc.username + ":" + kc.password
 		basicAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte(auth))
 		req.Header.Set("Authorization", basicAuth)
+		if os.Getenv("KANBOARD_DEBUG") == "true" {
+			fmt.Fprintf(os.Stderr, "DEBUG: Using username/password auth (%s)\n", kc.username)
+		}
 		return nil
 	}
 
@@ -3118,7 +3171,18 @@ func (kc *kanboardClient) setAuthentication(req *http.Request) error {
 }
 
 func (kc *kanboardClient) isValidAPIKey() bool {
-	return kc.apiKey != "" && kc.apiKey != "your-kanboard-api-key"
+	isValid := kc.apiKey != "" && kc.apiKey != "your-kanboard-api-key"
+	if os.Getenv("KANBOARD_DEBUG") == "true" {
+		fmt.Fprintf(os.Stderr, "DEBUG: API key validation - key length: %d, isValid: %v\n", len(kc.apiKey), isValid)
+		if !isValid {
+			if kc.apiKey == "" {
+				fmt.Fprintf(os.Stderr, "DEBUG: API key is empty\n")
+			} else if kc.apiKey == "your-kanboard-api-key" {
+				fmt.Fprintf(os.Stderr, "DEBUG: API key is placeholder value\n")
+			}
+		}
+	}
+	return isValid
 }
 
 func (kc *kanboardClient) isValidCredentials() bool {
@@ -3675,6 +3739,24 @@ func (kc *kanboardClient) createTestTaskHandler(ctx context.Context, request mcp
 	}
 
 	return mcp.NewToolResultText(fmt.Sprintf("Test task created successfully (RBAC bypassed):\n%s", string(resultBytes))), nil
+}
+
+// Helper functions for masking sensitive data in debug output
+func maskAPIKey(key string) string {
+	if key == "" || key == "your-kanboard-api-key" {
+		return key
+	}
+	if len(key) <= 8 {
+		return "****"
+	}
+	return key[:4] + "****" + key[len(key)-4:]
+}
+
+func maskPassword(password string) string {
+	if password == "" || password == "your-kanboard-password" {
+		return password
+	}
+	return strings.Repeat("*", len(password))
 }
 
 func (kc *kanboardClient) updateTaskHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
