@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -456,17 +457,17 @@ type AccessMapsConfig struct {
 }
 
 type AccessMapConfig struct {
-	DefaultRole string                 `json:"default_role"`
+	DefaultRole string                       `json:"default_role"`
 	Rules       map[string]map[string]string `json:"rules"`
 }
 
 // UserContext holds information about the current user and their permissions
 type UserContext struct {
-	UserID      int                 `json:"user_id"`
-	Username    string              `json:"username"`
-	AppRoles    []string            `json:"app_roles"`
-	ProjectRoles map[int]string     `json:"project_roles"` // project_id -> role
-	IsAdmin     bool                `json:"is_admin"`
+	UserID       int            `json:"user_id"`
+	Username     string         `json:"username"`
+	AppRoles     []string       `json:"app_roles"`
+	ProjectRoles map[int]string `json:"project_roles"` // project_id -> role
+	IsAdmin      bool           `json:"is_admin"`
 }
 
 // PermissionCheck represents a permission check request
@@ -536,9 +537,9 @@ func (rbac *RBACManager) CheckPermission(userCtx *UserContext, projectID *int, p
 // getHighestAppRole returns the highest application role from user's roles
 func (rbac *RBACManager) getHighestAppRole(userRoles []string) string {
 	rolePriority := map[string]int{
-		"app-admin":  3,
+		"app-admin":   3,
 		"app-manager": 2,
-		"app-user":   1,
+		"app-user":    1,
 	}
 
 	highestRole := ""
@@ -2120,11 +2121,10 @@ func main() {
 		),
 		mcp.WithString("filename",
 			mcp.Required(),
-			mcp.Description("Name of the file"),
+			mcp.Description("Name of the file, or file path if blob is not provided"),
 		),
 		mcp.WithString("blob",
-			mcp.Required(),
-			mcp.Description("File content encoded in base64"),
+			mcp.Description("File content encoded in base64. If not provided, filename will be treated as a file path and read from disk (relative paths will be resolved from current working directory)"),
 		),
 	)
 	s.AddTool(tool, kbClient.createProjectFileHandler)
@@ -2587,11 +2587,10 @@ func main() {
 		),
 		mcp.WithString("filename",
 			mcp.Required(),
-			mcp.Description("The filename"),
+			mcp.Description("The filename, or file path if blob is not provided"),
 		),
 		mcp.WithString("blob",
-			mcp.Required(),
-			mcp.Description("File content encoded in base64"),
+			mcp.Description("File content encoded in base64. If not provided, filename will be treated as a file path and read from disk (relative paths will be resolved from current working directory)"),
 		),
 	)
 	s.AddTool(tool, kbClient.createTaskFileHandler)
@@ -3028,7 +3027,7 @@ func (kc *kanboardClient) callKanboardAPIWithConfig(ctx context.Context, method 
 		}
 
 		lastErr = err
-		
+
 		// Don't retry on authentication or validation errors
 		if isNonRetryableError(err) {
 			break
@@ -3267,24 +3266,24 @@ func isNonRetryableError(err error) bool {
 	}
 
 	errStr := err.Error()
-	
+
 	// Authentication errors
-	if strings.Contains(errStr, "authentication") || 
-	   strings.Contains(errStr, "unauthorized") ||
-	   strings.Contains(errStr, "forbidden") {
+	if strings.Contains(errStr, "authentication") ||
+		strings.Contains(errStr, "unauthorized") ||
+		strings.Contains(errStr, "forbidden") {
 		return true
 	}
 
 	// Validation errors
 	if strings.Contains(errStr, "validation") ||
-	   strings.Contains(errStr, "invalid") ||
-	   strings.Contains(errStr, "not found") {
+		strings.Contains(errStr, "invalid") ||
+		strings.Contains(errStr, "not found") {
 		return true
 	}
 
 	// JSON-RPC protocol errors
 	if strings.Contains(errStr, "JSON-RPC") ||
-	   strings.Contains(errStr, "jsonrpc") {
+		strings.Contains(errStr, "jsonrpc") {
 		return true
 	}
 
@@ -5663,6 +5662,29 @@ func (kc *kanboardClient) getProjectActivitiesHandler(ctx context.Context, reque
 	return mcp.NewToolResultText(string(resultBytes)), nil
 }
 
+// readFileAsBase64 reads a file from the given path and returns its base64-encoded content.
+// If the path is not absolute, it will be resolved relative to the current working directory.
+func readFileAsBase64(filePath string) (string, error) {
+	// If path is not absolute, concatenate with current working directory
+	if !filepath.IsAbs(filePath) {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("failed to get current working directory: %v", err)
+		}
+		filePath = filepath.Join(wd, filePath)
+	}
+
+	// Read the file
+	fileData, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file %s: %v", filePath, err)
+	}
+
+	// Encode to base64
+	encoded := base64.StdEncoding.EncodeToString(fileData)
+	return encoded, nil
+}
+
 func (kc *kanboardClient) createProjectFileHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	projectId, err := request.RequireInt("project_id")
 	if err != nil {
@@ -5672,9 +5694,19 @@ func (kc *kanboardClient) createProjectFileHandler(ctx context.Context, request 
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	blob, err := request.RequireString("blob")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+
+	// Get blob, but make it optional
+	blob := request.GetString("blob", "")
+
+	// If blob is missing/empty, treat filename as a file path
+	if blob == "" {
+		var err error
+		blob, err = readFileAsBase64(filename)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to read file: %v", err)), nil
+		}
+		// Extract just the filename from the path for the API
+		filename = filepath.Base(filename)
 	}
 
 	params := map[string]interface{}{
@@ -6445,9 +6477,19 @@ func (kc *kanboardClient) createTaskFileHandler(_ context.Context, request mcp.C
 	if filename == "" {
 		return mcp.NewToolResultError("filename is required"), nil
 	}
+
+	// Get blob, but make it optional
 	blob := request.GetString("blob", "")
+
+	// If blob is missing/empty, treat filename as a file path
 	if blob == "" {
-		return mcp.NewToolResultError("blob is required"), nil
+		var err error
+		blob, err = readFileAsBase64(filename)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to read file: %v", err)), nil
+		}
+		// Extract just the filename from the path for the API
+		filename = filepath.Base(filename)
 	}
 
 	result, err := kc.CreateTaskFile(
@@ -7978,4 +8020,3 @@ func (kc *kanboardClient) getAllSprintsByProjectHandler(ctx context.Context, req
 
 	return mcp.NewToolResultText(string(resultBytes)), nil
 }
-

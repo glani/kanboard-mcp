@@ -342,7 +342,7 @@ After saving the configuration, restart your MCP client (Cursor, Claude Desktop,
 
 | Tool | Description | Example |
 |------|-------------|---------|
-| `create_project_file` | ➕ Create and upload a new project attachment | "Create a file 'My Document.pdf' for project 1 with base64 content 'Zm9vYmFy'" |
+| `create_project_file` | ➕ Create and upload a new project attachment | "Create a file 'My Document.pdf' for project 1 with base64 content 'Zm9vYmFy'" or "Create a file '/path/to/document.pdf' for project 1" (file path will be read automatically) |
 | `get_all_project_files` | 📋 Get all files attached to a project | "Show all files for project 123" |
 | `get_project_file` | 🔍 Get file information | "Get details for file 456 in project 123" |
 | `download_project_file` | 📥 Download project file contents (encoded in base64) | "Download file 456 from project 123" |
@@ -407,7 +407,7 @@ After saving the configuration, restart your MCP client (Cursor, Claude Desktop,
 
 | Tool | Description | Example |
 |------|-------------|---------|
-| `create_task_file` | ➕ Create and upload a new task attachment | "Create a file 'meeting_notes.txt' for project 1 with task 2 and base64 content 'Zm9vYmFy'" |
+| `create_task_file` | ➕ Create and upload a new task attachment | "Create a file 'meeting_notes.txt' for project 1 with task 2 and base64 content 'Zm9vYmFy'" or "Create a file '/path/to/notes.txt' for project 1 with task 2" (file path will be read automatically) |
 | `get_all_task_files` | 📋 Get all files attached to task | "Show all files for task 123" |
 | `get_task_file` | 🔍 Get file information | "Get details for file 456" |
 | `download_task_file` | 📥 Download file contents (encoded in base64) | "Download file 456" |
@@ -538,6 +538,35 @@ After saving the configuration, restart your MCP client (Cursor, Claude Desktop,
 # Set deadlines
 "Set due date for task 3 to 2024-01-20"
 ```
+
+### File Attachments
+
+You can attach files to projects and tasks in two ways:
+
+**Option 1: Using file paths (recommended)**
+```bash
+# Attach a file to a project using a file path
+# Relative paths are resolved from the current working directory
+"Create a file 'document.pdf' for project 1"
+"Create a file '/absolute/path/to/report.docx' for project 1"
+
+# Attach a file to a task using a file path
+"Create a file 'meeting_notes.txt' for project 1 with task 2"
+"Create a file './documents/spec.pdf' for project 1 with task 2"
+```
+
+**Option 2: Using base64-encoded content**
+```bash
+# Attach a file with base64-encoded content
+"Create a file 'My Document.pdf' for project 1 with base64 content 'Zm9vYmFy'"
+"Create a file 'notes.txt' for project 1 with task 2 and base64 content 'SGVsbG8gV29ybGQ='"
+```
+
+**Note:** When using file paths:
+- If the `blob` parameter is not provided, the `filename` parameter is treated as a file path
+- Absolute paths are used as-is
+- Relative paths are resolved relative to the current working directory
+- The file is automatically read and encoded as base64 before uploading
 
 ## 🔧 Development
 
