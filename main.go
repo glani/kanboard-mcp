@@ -695,6 +695,25 @@ func (rbac *RBACManager) GetUserContext(kc *kanboardClient, ctx context.Context)
 	}, nil
 }
 
+// requireID is a helper function that accepts ID parameters as either int or string
+func requireID(request mcp.CallToolRequest, paramName string) (int, error) {
+	// Try to get as int first
+	id, err := request.RequireInt(paramName)
+	if err == nil {
+		return id, nil
+	}
+	// If that fails, try as string and convert
+	idStr, err := request.RequireString(paramName)
+	if err != nil {
+		return 0, fmt.Errorf("parameter %s must be an integer or a string representation of an integer", paramName)
+	}
+	idInt, err := strconv.Atoi(idStr)
+	if err != nil {
+		return 0, fmt.Errorf("parameter %s must be a valid integer, got: %s", paramName, idStr)
+	}
+	return idInt, nil
+}
+
 // checkPermission is a helper method for kanboardClient to check permissions
 func (kc *kanboardClient) checkPermission(ctx context.Context, projectID *int, procedure, method string) error {
 	// Allow bypassing permission checks for debugging
@@ -4341,13 +4360,9 @@ func (kc *kanboardClient) removeExternalTaskLinkHandler(ctx context.Context, req
 }
 
 func (kc *kanboardClient) getColumnsHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	projectIdStr, err := request.RequireString("project_id")
+	projectId, err := requireID(request, "project_id")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
-	}
-	projectId, err := strconv.Atoi(projectIdStr)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Invalid project_id: %v", err)), nil
 	}
 
 	params := map[string]int{"project_id": projectId}
@@ -4384,13 +4399,9 @@ func (kc *kanboardClient) getColumnHandler(ctx context.Context, request mcp.Call
 }
 
 func (kc *kanboardClient) createColumnHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	projectIdStr, err := request.RequireString("project_id")
+	projectId, err := requireID(request, "project_id")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
-	}
-	projectId, err := strconv.Atoi(projectIdStr)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Invalid project_id: %v", err)), nil
 	}
 	title, err := request.RequireString("title")
 	if err != nil {
@@ -4481,13 +4492,9 @@ func (kc *kanboardClient) deleteColumnHandler(ctx context.Context, request mcp.C
 }
 
 func (kc *kanboardClient) reorderColumnsHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	projectIdStr, err := request.RequireString("project_id")
+	projectId, err := requireID(request, "project_id")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
-	}
-	projectId, err := strconv.Atoi(projectIdStr)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Invalid project_id: %v", err)), nil
 	}
 	columnId, err := request.RequireInt("column_id")
 	if err != nil {
@@ -4518,13 +4525,9 @@ func (kc *kanboardClient) reorderColumnsHandler(ctx context.Context, request mcp
 }
 
 func (kc *kanboardClient) getCategoriesHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	projectIdStr, err := request.RequireString("project_id")
+	projectId, err := requireID(request, "project_id")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
-	}
-	projectId, err := strconv.Atoi(projectIdStr)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Invalid project_id: %v", err)), nil
 	}
 
 	params := map[string]int{"project_id": projectId}
@@ -4542,13 +4545,9 @@ func (kc *kanboardClient) getCategoriesHandler(ctx context.Context, request mcp.
 }
 
 func (kc *kanboardClient) createCategoryHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	projectIdStr, err := request.RequireString("project_id")
+	projectId, err := requireID(request, "project_id")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
-	}
-	projectId, err := strconv.Atoi(projectIdStr)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Invalid project_id: %v", err)), nil
 	}
 
 	// Check permission for creating categories (project-level)
