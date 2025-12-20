@@ -2152,7 +2152,7 @@ func main() {
 	s.AddTool(tool, kbClient.getProjectFileHandler)
 
 	tool = mcp.NewTool("download_project_file",
-		mcp.WithDescription("Download project file contents (encoded in base64)"),
+		mcp.WithDescription("Download project file contents (encoded in base64). Optionally save to disk if save_path is provided."),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project"),
@@ -2160,6 +2160,9 @@ func main() {
 		mcp.WithNumber("file_id",
 			mcp.Required(),
 			mcp.Description("ID of the file to download"),
+		),
+		mcp.WithString("save_path",
+			mcp.Description("Optional path to save the file. If 'temp', saves to OS temp directory. If empty, returns base64 content only. If directory, saves with original filename. If full path, saves to that location."),
 		),
 	)
 	s.AddTool(tool, kbClient.downloadProjectFileHandler)
@@ -2614,10 +2617,13 @@ func main() {
 	s.AddTool(tool, kbClient.getTaskFileHandler)
 
 	tool = mcp.NewTool("download_task_file",
-		mcp.WithDescription("Download file contents (encoded in base64)"),
+		mcp.WithDescription("Download file contents (encoded in base64). Optionally save to disk if save_path is provided."),
 		mcp.WithNumber("file_id",
 			mcp.Required(),
 			mcp.Description("The file ID"),
+		),
+		mcp.WithString("save_path",
+			mcp.Description("Optional path to save the file. If 'temp', saves to OS temp directory. If empty, returns base64 content only. If directory, saves with original filename. If full path, saves to that location."),
 		),
 	)
 	s.AddTool(tool, kbClient.downloadTaskFileHandler)
@@ -5685,6 +5691,80 @@ func readFileAsBase64(filePath string) (string, error) {
 	return encoded, nil
 }
 
+// saveBase64ToFile saves base64-encoded content to a file at the specified path.
+// savePath can be:
+//   - "temp" or starts with "temp" -> saves to OS temp directory
+//   - Empty string -> saves to current directory with filename
+//   - Absolute path with filename -> uses as-is
+//   - Directory path -> concatenates with filename
+//   - Relative path -> resolves from current directory
+func saveBase64ToFile(base64Content, savePath, filename string) (string, error) {
+	// Decode base64 content
+	fileData, err := base64.StdEncoding.DecodeString(base64Content)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode base64 content: %v", err)
+	}
+
+	var finalPath string
+
+	// Handle temp directory
+	savePathLower := strings.ToLower(strings.TrimSpace(savePath))
+	if savePathLower == "temp" || savePathLower == "tmp" {
+		tempDir := os.TempDir()
+		finalPath = filepath.Join(tempDir, filename)
+	} else if strings.HasPrefix(savePathLower, "temp/") || strings.HasPrefix(savePathLower, "tmp/") {
+		tempDir := os.TempDir()
+		// Extract subdirectory path after temp/ or tmp/
+		subPath := strings.TrimPrefix(savePathLower, "temp/")
+		subPath = strings.TrimPrefix(subPath, "tmp/")
+		// If subPath looks like a filename (has extension), use it; otherwise append filename
+		if filepath.Ext(subPath) != "" && !strings.Contains(subPath, string(filepath.Separator)) {
+			// It's a filename in temp dir
+			finalPath = filepath.Join(tempDir, subPath)
+		} else {
+			// It's a subdirectory, append filename
+			finalPath = filepath.Join(tempDir, subPath, filename)
+		}
+	} else if savePath == "" {
+		// No path specified, save to current directory
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("failed to get current working directory: %v", err)
+		}
+		finalPath = filepath.Join(wd, filename)
+	} else {
+		// Check if savePath is a directory or a full path
+		info, err := os.Stat(savePath)
+		if err == nil && info.IsDir() {
+			// It's a directory, concatenate with filename
+			finalPath = filepath.Join(savePath, filename)
+		} else if filepath.IsAbs(savePath) {
+			// It's an absolute path, use as-is
+			finalPath = savePath
+		} else {
+			// Relative path, resolve from current directory
+			wd, err := os.Getwd()
+			if err != nil {
+				return "", fmt.Errorf("failed to get current working directory: %v", err)
+			}
+			finalPath = filepath.Join(wd, savePath)
+		}
+	}
+
+	// Ensure directory exists
+	dir := filepath.Dir(finalPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create directory %s: %v", dir, err)
+	}
+
+	// Write file
+	if err := os.WriteFile(finalPath, fileData, 0644); err != nil {
+		return "", fmt.Errorf("failed to write file %s: %v", finalPath, err)
+	}
+
+	return finalPath, nil
+}
+
 func (kc *kanboardClient) createProjectFileHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	projectId, err := request.RequireInt("project_id")
 	if err != nil {
@@ -5773,11 +5853,60 @@ func (kc *kanboardClient) downloadProjectFileHandler(ctx context.Context, reques
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	savePath := request.GetString("save_path", "")
+
+	// Get file info first to extract filename
+	fileInfoParams := map[string]int{"project_id": projectId, "file_id": fileId}
+	fileInfo, err := kc.callKanboardAPI(ctx, "getProjectFile", fileInfoParams)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	// Extract filename from file info
+	var filename string
+	if fileInfoMap, ok := fileInfo.(map[string]interface{}); ok {
+		if name, exists := fileInfoMap["name"]; exists {
+			filename = fmt.Sprintf("%v", name)
+		} else {
+			filename = fmt.Sprintf("file_%d", fileId)
+		}
+	} else {
+		filename = fmt.Sprintf("file_%d", fileId)
+	}
+
+	// Download file content
 	params := map[string]int{"project_id": projectId, "file_id": fileId}
 	result, err := kc.callKanboardAPI(ctx, "downloadProjectFile", params)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+
+	// Extract base64 content from result
+	var base64Content string
+	if resultMap, ok := result.(map[string]interface{}); ok {
+		if data, exists := resultMap["data"]; exists {
+			base64Content = fmt.Sprintf("%v", data)
+		} else {
+			// If result is a map but no "data" key, try to use the whole result as string
+			resultBytes, _ := json.Marshal(result)
+			base64Content = string(resultBytes)
+		}
+	} else if resultStr, ok := result.(string); ok {
+		base64Content = resultStr
+	} else {
+		return mcp.NewToolResultError(fmt.Sprintf("unexpected result type: %T", result)), nil
+	}
+
+	// If save_path is provided, save the file
+	if savePath != "" {
+		savedPath, err := saveBase64ToFile(base64Content, savePath, filename)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to save file: %v", err)), nil
+		}
+		return mcp.NewToolResultText(fmt.Sprintf("File saved to: %s", savedPath)), nil
+	}
+
+	// Return base64 content as JSON
 	resultBytes, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to marshal API result: %v", err)), nil
@@ -6547,12 +6676,43 @@ func (kc *kanboardClient) downloadTaskFileHandler(_ context.Context, request mcp
 	if fileID == 0 {
 		return mcp.NewToolResultError("file_id is required"), nil
 	}
+	savePath := request.GetString("save_path", "")
 
-	result, err := kc.DownloadTaskFile(fileID)
+	// Get file info first to extract filename
+	fileInfo, err := kc.GetTaskFile(fileID)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	return mcp.NewToolResultText(result), nil
+
+	// Extract filename from file info
+	var filename string
+	if fileInfoMap, ok := fileInfo.(map[string]interface{}); ok {
+		if name, exists := fileInfoMap["name"]; exists {
+			filename = fmt.Sprintf("%v", name)
+		} else {
+			filename = fmt.Sprintf("file_%d", fileID)
+		}
+	} else {
+		filename = fmt.Sprintf("file_%d", fileID)
+	}
+
+	// Download file content
+	base64Content, err := kc.DownloadTaskFile(fileID)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	// If save_path is provided, save the file
+	if savePath != "" {
+		savedPath, err := saveBase64ToFile(base64Content, savePath, filename)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to save file: %v", err)), nil
+		}
+		return mcp.NewToolResultText(fmt.Sprintf("File saved to: %s", savedPath)), nil
+	}
+
+	// Return base64 content
+	return mcp.NewToolResultText(base64Content), nil
 }
 
 func (kc *kanboardClient) removeTaskFileHandler(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
