@@ -72,7 +72,91 @@ We recommend using [mcpproxy](https://github.com/bivex/mcpproxy) as a proxy solu
 
 ## ⚙️ Configuration
 
-### 1. Environment Variables
+### 1. Tool Configuration (YAML)
+
+The MCP server supports selective tool enabling through a YAML configuration file (`mcp-tools-config.yaml`). This allows you to control which tools are exposed to the MCP client, which is important for several reasons:
+
+**Why Limit Tools?**
+- **Model Limitations**: Some AI models cannot handle more than 80 tools in MCP. Limiting tools ensures compatibility.
+- **Reduced Ambiguity**: Fewer tools mean clearer intent. For example, having both `delete_task` and `remove_project` can cause confusion when a user says "delete project" - the model might choose the wrong tool.
+- **Better Performance**: Fewer tools mean faster tool selection and reduced token usage.
+- **Security**: Only expose tools that are actually needed for your use case.
+
+**Configuration File Location:**
+The configuration file is automatically loaded from:
+1. Path specified in `MCP_TOOLS_CONFIG` environment variable
+2. `mcp-tools-config.yaml` in the same directory as the executable
+3. Current working directory
+
+**Configuration Structure:**
+```yaml
+# Domain: corerules
+# Tools specified in .cursorrules file - these are always enabled
+corerules:
+  enabled: true
+  tools:
+    - create_task
+    - update_task
+    - delete_task
+    - assign_task
+    - move_task_position
+    - set_task_tags
+    - get_task
+    - get_all_tasks
+    # ... more tools
+
+# All other domains are disabled by default
+# Uncomment and enable domains as needed
+tasks:
+  enabled: false
+  tools:
+    - create_task
+    - update_task
+    # ... more task tools
+```
+
+**Available Domains:**
+- `corerules` - Core tools required by cursor rules (always enabled if specified)
+- `tasks` - Task management tools
+- `projects` - Project management tools
+- `comments` - Comment management
+- `categories` - Category management
+- `columns` - Column management
+- `swimlanes` - Swimlane management
+- `subtasks` - Subtask management
+- `tags` - Tag management
+- `users` - User management
+- `groups` - Group management
+- `links` - Task link management
+- `actions` - Automated actions
+- `board` - Board operations
+- `sprints` - Sprint management
+- `search` - Search operations
+- `metadata` - Metadata operations
+- `system` - System information
+- `external_links` - External link providers
+- `dashboard` - Dashboard and activity
+
+**Example Configuration:**
+```yaml
+corerules:
+  enabled: true
+  tools:
+    - create_task
+    - update_task
+    - delete_task
+    - assign_task
+    - get_task
+    - get_all_tasks
+    - get_project_users
+    - assign_user_to_project
+    - get_users
+    - get_columns
+```
+
+**Note:** If the configuration file doesn't exist or a tool is not listed in any enabled domain, that tool will not be registered and will not be available to the MCP client.
+
+### 2. Environment Variables
 
 Set up your Kanboard credentials and RBAC permissions using environment variables:
 
@@ -163,7 +247,7 @@ If you're getting "access denied" errors:
    export KANBOARD_USER_PROJECT_ROLES="27:project-manager"
    ```
 
-### 2. MCP Client Configuration
+### 3. MCP Client Configuration
 
 Create the MCP configuration file for your client:
 
@@ -191,7 +275,7 @@ Create the MCP configuration file for your client:
 }
 ```
 
-### 3. Restart Your Client
+### 4. Restart Your Client
 
 After saving the configuration, restart your MCP client (Cursor, Claude Desktop, etc.) for changes to take effect.
 
@@ -238,6 +322,8 @@ After saving the configuration, restart your MCP client (Cursor, Claude Desktop,
 | `search_tasks` | 🔍 Find tasks by using the search engine | "Search tasks in project 2 for query 'assignee:nobody'" |
 | `assign_task` | 👤 Assign tasks to users | "Assign the API task to John" |
 | `set_task_due_date` | 📅 Set task deadlines | "Set due date for login task to 2024-01-15" |
+
+**Note on `assign_task`:** This tool uses the Kanboard `updateTask` API method with the `owner_id` parameter. The `owner_id` field in Kanboard represents the responsible/assigned user (not the creator). If assignment fails, ensure the user is a member of the project and has appropriate permissions.
 
 ### 💬 Comment Management
 

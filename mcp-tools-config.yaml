@@ -1,0 +1,330 @@
+# MCP Tools Configuration
+# This file controls which tools are exposed by the Kanboard MCP server
+# Tools are grouped by domain for better organization
+
+# Domain: corerules
+# Tools specified in .cursorrules file - these are always enabled
+# Based on cursorrules, the following tools are required:
+# - create_task, update_task, delete_task, assign_task, move_task_position, set_task_tags (task management)
+# - create_project_file, create_task_file, download_project_file, download_task_file (file operations)
+# - get_task, get_all_tasks (task retrieval)
+# - get_all_project_files, get_all_task_files (file listing)
+corerules:
+  enabled: true
+  tools:
+    - create_task
+    - update_task
+    - delete_task
+    - assign_task
+    - move_task_position
+    - set_task_tags
+    - create_project_file
+    - create_task_file
+    - download_project_file
+    - download_task_file
+    - get_task
+    - get_all_tasks
+    - get_all_project_files
+    - get_all_task_files
+    - get_project_users
+    - assign_user_to_project
+    - get_users
+    - get_columns
+
+# All other domains are disabled (commented out)
+# Uncomment and enable domains as needed
+
+# # Domain: tasks
+# # Task-related operations
+# tasks:
+#   enabled: false
+#   tools:
+#     - create_task
+#     - update_task
+#     - delete_task
+#     - get_task
+#     - get_all_tasks
+#     - get_tasks
+#     - assign_task
+#     - close_task
+#     - open_task
+#     - move_task_position
+#     - move_task_to_project
+#     - duplicate_task_to_project
+#     - create_task_file
+#     - download_task_file
+#     - get_all_task_files
+#     - remove_task_file
+#     - remove_all_task_files
+#     - get_task_file
+#     - create_task_link
+#     - update_task_link
+#     - remove_task_link
+#     - get_all_task_links
+#     - get_task_link_by_id
+#     - create_external_task_link
+#     - update_external_task_link
+#     - remove_external_task_link
+#     - get_all_external_task_links
+#     - get_external_task_link_by_id
+#     - get_task_by_reference
+#     - get_task_comments
+#     - get_task_tags
+#     - set_task_tags
+#     - set_task_due_date
+#     - get_task_metadata
+#     - get_task_metadata_by_name
+#     - save_task_metadata
+#     - remove_task_metadata
+#     - create_test_task
+
+# # Domain: projects
+# # Project management tools
+# projects:
+#   enabled: false
+#   tools:
+#     - get_projects
+#     - get_all_projects
+#     - get_my_projects
+#     - get_my_projects_list
+#     - create_project
+#     - create_my_private_project
+#     - update_project
+#     - delete_task
+#     - get_project_by_id
+#     - get_project_by_name
+#     - get_project_by_identifier
+#     - get_project_by_email
+#     - enable_project
+#     - disable_project
+#     - enable_project_public_access
+#     - disable_project_public_access
+#     - get_project_users
+#     - get_project_user_role
+#     - add_project_user
+#     - remove_project_user
+#     - change_project_user_role
+#     - add_project_group
+#     - remove_project_group
+#     - change_project_group_role
+#     - get_project_activities
+#     - get_project_activity
+#     - get_project_metadata
+#     - get_project_metadata_by_name
+#     - save_project_metadata
+#     - remove_project_metadata
+#     - get_project_file
+#     - create_project_file
+#     - download_project_file
+#     - get_all_project_files
+#     - remove_project_file
+#     - remove_all_project_files
+
+# # Domain: comments
+# # Comment management
+# comments:
+#   enabled: false
+#   tools:
+#     - create_comment
+#     - update_comment
+#     - remove_comment
+#     - get_comment
+#     - get_task_comments
+
+# # Domain: categories
+# # Category management
+# categories:
+#   enabled: false
+#   tools:
+#     - create_category
+#     - update_category
+#     - delete_category
+#     - get_category
+#     - get_categories
+
+# # Domain: columns
+# # Column management
+# columns:
+#   enabled: false
+#   tools:
+#     - create_column
+#     - update_column
+#     - delete_column
+#     - get_column
+#     - get_columns
+#     - reorder_columns
+
+# # Domain: swimlanes
+# # Swimlane management
+# swimlanes:
+#   enabled: false
+#   tools:
+#     - create_swimlane
+#     - update_swimlane
+#     - disable_swimlane
+#     - enable_swimlane
+#     - remove_swimlane
+#     - get_swimlane
+#     - get_swimlane_by_id
+#     - get_swimlane_by_name
+#     - get_swimlanes
+#     - get_active_swimlanes
+#     - change_swimlane_position
+
+# # Domain: subtasks
+# # Subtask management
+# subtasks:
+#   enabled: false
+#   tools:
+#     - create_subtask
+#     - update_subtask
+#     - remove_subtask
+#     - get_subtask
+#     - get_all_subtasks
+#     - get_subtask_time_spent
+#     - set_subtask_start_time
+#     - set_subtask_end_time
+#     - has_subtask_timer
+
+# # Domain: tags
+# # Tag management
+# tags:
+#   enabled: false
+#   tools:
+#     - create_tag
+#     - update_tag
+#     - remove_tag
+#     - get_all_tags
+#     - get_tags_by_project
+#     - get_task_tags
+#     - set_task_tags
+
+# # Domain: users
+# # User management
+# users:
+#   enabled: false
+#   tools:
+#     - create_user
+#     - create_ldap_user
+#     - update_user
+#     - remove_user
+#     - enable_user
+#     - disable_user
+#     - get_user
+#     - get_user_by_name
+#     - get_users
+#     - get_assignable_users
+#     - is_active_user
+
+# # Domain: groups
+# # Group management
+# groups:
+#   enabled: false
+#   tools:
+#     - create_group
+#     - update_group
+#     - remove_group
+#     - get_group
+#     - get_all_groups
+#     - get_group_members
+#     - add_group_member
+#     - remove_group_member
+#     - get_member_groups
+#     - is_group_member
+
+# # Domain: links
+# # Task link management
+# links:
+#   enabled: false
+#   tools:
+#     - create_link
+#     - update_link
+#     - remove_link
+#     - get_link_by_id
+#     - get_link_by_label
+#     - get_all_links
+#     - get_opposite_link_id
+
+# # Domain: actions
+# # Automated actions
+# actions:
+#   enabled: false
+#   tools:
+#     - create_action
+#     - remove_action
+#     - get_actions
+#     - get_available_actions
+#     - get_available_action_events
+#     - get_compatible_action_events
+
+# # Domain: board
+# # Board operations
+# board:
+#   enabled: false
+#   tools:
+#     - get_board
+
+# # Domain: sprints
+# # Sprint management
+# sprints:
+#   enabled: false
+#   tools:
+#     - create_sprint
+#     - update_sprint
+#     - remove_sprint
+#     - get_sprint_by_id
+#     - get_all_sprints_by_project
+
+# # Domain: search
+# # Search operations
+# search:
+#   enabled: false
+#   tools:
+#     - search_tasks
+
+# # Domain: metadata
+# # Metadata operations
+# metadata:
+#   enabled: false
+#   tools:
+#     - get_task_metadata
+#     - get_task_metadata_by_name
+#     - save_task_metadata
+#     - remove_task_metadata
+#     - get_project_metadata
+#     - get_project_metadata_by_name
+#     - save_project_metadata
+#     - remove_project_metadata
+
+# # Domain: system
+# # System information and utilities
+# system:
+#   enabled: false
+#   tools:
+#     - get_me
+#     - get_version
+#     - get_timezone
+#     - get_application_roles
+#     - get_project_roles
+#     - get_color_list
+#     - get_default_task_color
+#     - get_default_task_colors
+
+# # Domain: external_links
+# # External link providers
+# external_links:
+#   enabled: false
+#   tools:
+#     - get_external_task_link_types
+#     - get_ext_link_provider_deps
+
+# # Domain: dashboard
+# # Dashboard and activity
+# dashboard:
+#   enabled: false
+#   tools:
+#     - get_my_dashboard
+#     - get_my_activity_stream
+#     - get_my_overdue_tasks
+#     - get_overdue_tasks
+#     - get_overdue_tasks_by_project
