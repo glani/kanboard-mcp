@@ -17,6 +17,8 @@ corerules:
     - delete_task
     - assign_task
     - move_task_position
+    - close_task
+    - open_task
     - set_task_tags
     - create_project_file
     - create_task_file
@@ -30,6 +32,12 @@ corerules:
     - assign_user_to_project
     - get_users
     - get_columns
+    # Comment tools for "add comment to task" functionality
+    - create_comment
+    - get_task_comments
+    - get_comment
+    - update_comment
+    - remove_comment
 
 # All other domains are disabled (commented out)
 # Uncomment and enable domains as needed
