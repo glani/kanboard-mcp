@@ -9,6 +9,7 @@ A powerful Go-based MCP server that enables seamless integration between AI assi
 ![Go](https://img.shields.io/badge/Go-1.21+-blue?style=for-the-badge&logo=go)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 ![MCP](https://img.shields.io/badge/MCP-Protocol-orange?style=for-the-badge)
+![Docker](https://img.shields.io/badge/Docker-Supported-blue?style=for-the-badge&logo=docker)
 
 ⚠️ **Warning:** To avoid issues like these:
 
@@ -22,6 +23,7 @@ We recommend using [mcpproxy](https://github.com/bivex/mcpproxy) as a proxy solu
 
 - [✨ Features](#-features)
 - [🚀 Quick Start](#-quick-start)
+- [🐳 Docker](#-docker)
 - [⚙️ Configuration](#️-configuration)
 - [🛠️ Available Tools](#️-available-tools)
 - [📖 Usage Examples](#-usage-examples)
@@ -36,6 +38,8 @@ We recommend using [mcpproxy](https://github.com/bivex/mcpproxy) as a proxy solu
 - 🔐 **Secure Authentication** - Support for both API key and username/password auth
 - ⚡ **High Performance** - Built with Go for optimal performance
 - 🎯 **MCP Standard** - Compatible with all MCP clients
+- 🐳 **Docker Support** - Multi-architecture Docker images with Builder Pattern
+- 📦 **Binary Distribution** - Export static binaries for Linux (AMD64/ARM64)
 
 ## 🚀 Quick Start
 
@@ -55,20 +59,194 @@ We recommend using [mcpproxy](https://github.com/bivex/mcpproxy) as a proxy solu
 
 2. **Build the executable:**
 
-   **On Windows:**
-   ```cmd
-   build-release.bat
-   ```
-
-   **On Linux/macOS:**
+   **Option A: Using Docker (Recommended)**
    ```bash
-   ./build-release.sh
+   # Build Docker image
+   ./build.sh
+
+   # Or export Linux binaries directly
+   ./build.sh -a all -e
    ```
 
-   **Manual build:**
+   **Option B: Build scripts**
+   - **On Windows:**
+     ```cmd
+     build-release.bat
+     ```
+   - **On Linux/macOS:**
+     ```bash
+     ./build-release.sh
+     ```
+
+   **Option C: Manual build**
    ```bash
    go build -ldflags="-s -w" -o kanboard-mcp .
    ```
+
+## 🐳 Docker
+
+This project uses **Docker Builder Pattern** with Multi-Stage Build and Local Export to build the Kanboard MCP Server for Linux containers. This approach provides optimized, secure, and cross-platform builds.
+
+### Quick Docker Start
+
+**Run directly with Docker:**
+```bash
+docker run --rm -it \
+  -e KANBOARD_API_ENDPOINT='https://your-kanboard-url/jsonrpc.php' \
+  -e KANBOARD_API_KEY='your-api-key' \
+  kanboard-mcp:latest
+```
+
+### Build with Docker
+
+**Build for current platform:**
+```bash
+./build.sh
+```
+
+**Export binaries for distribution (Builder Pattern):**
+```bash
+# Export for both architectures (AMD64 and ARM64)
+./build.sh -a all -e
+
+# Output structure:
+# dist/
+# ├── linux-amd64/kanboard-mcp
+# └── linux-arm64/kanboard-mcp
+```
+
+**Build Docker image for specific architecture:**
+```bash
+./build.sh -a arm64
+./build.sh -a amd64
+```
+
+**Build multi-platform image:**
+```bash
+./build.sh -a all
+```
+
+### Available Build Options
+
+```bash
+./build.sh [OPTIONS]
+
+Options:
+    -a, --arch ARCH       Architecture: amd64, arm64, or all (default: current platform)
+    -t, --tag TAG         Image tag (default: latest)
+    -n, --name NAME       Image name (default: kanboard-mcp)
+    -o, --output DIR      Output directory for local export (default: ./dist)
+    -r, --registry REG    Registry to push to
+    -p, --push            Push image to registry
+    -e, --export-only     Export artifacts only, skip image creation
+    -v, --version VER     Version string to embed in binary
+    -h, --help            Show help message
+```
+
+### Examples
+
+**Export binaries for both architectures:**
+```bash
+./build.sh -a all -e -v 1.2.3
+```
+
+**Build and push to Docker Hub:**
+```bash
+./build.sh -a all -r docker.io/yourusername -p -t v1.2.3
+```
+
+**Build for GitHub Container Registry:**
+```bash
+./build.sh -a all -r ghcr.io/yourusername -p -t v1.2.3
+```
+
+### Docker Image Details
+
+- **Base Image**: `scratch` (minimal, secure)
+- **Binary Size**: ~7.3 MB (AMD64), ~7.6 MB (ARM64)
+- **Architectures**: `linux/amd64`, `linux/arm64`
+- **Static Binary**: No external dependencies
+- **Includes**: SSL certificates and timezone data
+
+### Using Exported Binary
+
+```bash
+# Make executable
+chmod +x dist/linux-amd64/kanboard-mcp
+
+# Run with environment variables
+export KANBOARD_API_ENDPOINT='https://your-kanboard-url/jsonrpc.php'
+export KANBOARD_API_KEY='your-api-key'
+
+./dist/linux-amd64/kanboard-mcp
+```
+
+### Docker Compose
+
+Create `docker-compose.yml`:
+
+```yaml
+version: '3.8'
+services:
+  kanboard-mcp:
+    build: .
+    container_name: kanboard-mcp
+    restart: unless-stopped
+    environment:
+      - KANBOARD_API_ENDPOINT=https://your-kanboard-url/jsonrpc.php
+      - KANBOARD_API_KEY=your-api-key
+      - KANBOARD_USERNAME=your-username
+      - KANBOARD_PASSWORD=your-password
+    volumes:
+      - ./mcp-tools-config.yaml:/app/mcp-tools-config.yaml:ro
+```
+
+Run with:
+```bash
+docker-compose up -d
+```
+
+### Advanced Docker Usage
+
+**Build with custom output directory:**
+```bash
+./build.sh -a all -e -o ./binaries
+```
+
+**Run with custom config:**
+```bash
+docker run --rm -it \
+  -e KANBOARD_API_ENDPOINT='https://your-kanboard-url/jsonrpc.php' \
+  -e KANBOARD_API_KEY='your-api-key' \
+  -v $(pwd)/mcp-tools-config.yaml:/app/mcp-tools-config.yaml:ro \
+  kanboard-mcp:latest
+```
+
+**Inspect binary version:**
+```bash
+# From exported binary
+./dist/linux-amd64/kanboard-mcp
+
+# Or from container
+docker run --rm kanboard-mcp:latest
+```
+
+### What is Builder Pattern?
+
+This project uses modern Docker Builder Pattern with:
+
+1. **Multi-Stage Build**: Separate build and runtime environments for smaller, more secure images
+2. **Local Export**: Extract binaries directly to host filesystem using `--output type=local`
+3. **Cross-Platform**: Support for both AMD64 and ARM64 architectures
+4. **Optimization**: Statically-linked binaries, stripped symbols, minimal size
+
+**Benefits:**
+- Minimal image size (~7.3 MB)
+- No build tools in production images
+- Direct binary distribution without Docker overhead
+- Cross-platform builds from a single Dockerfile
+
+For detailed documentation, see [DOCKER.md](DOCKER.md)
 
 ## ⚙️ Configuration
 
@@ -680,9 +858,14 @@ kanboard-mcp/
 ├── main.go              # Main application entry point
 ├── go.mod               # Go module dependencies
 ├── go.sum               # Dependency checksums
-├── build-release.bat    # Windows build script
-├── build-release.sh     # Unix build script
+├── Dockerfile           # Multi-stage Docker build (Builder Pattern)
+├── build.sh             # Docker build script with multi-arch support
+├── build-darwin.sh      # macOS build script
+├── build-release.bat     # Windows build script
+├── build-release.sh      # Unix build script
+├── mcp-tools-config.yaml # Tool configuration
 ├── README.md            # This file
+├── DOCKER.md            # Docker documentation
 └── LICENSE.md           # License information
 ```
 

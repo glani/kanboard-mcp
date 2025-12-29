@@ -1,0 +1,37 @@
+# =============================================================================
+# .dockerignore - Files to exclude from Docker build context
+# =============================================================================
+
+# Output directories
+dist/
+out/
+bin/
+
+# Git
+.git/
+.gitignore
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Documentation
+*.md
+!README.md
+
+# Build artifacts (except Dockerfile and build scripts)
+build-*.sh
+build-*.bat
+*.gif
+LICENSE.md
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.github/
+
