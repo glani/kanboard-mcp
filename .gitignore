@@ -9,6 +9,9 @@
 kanboard-mcp
 kanboard-mcp-*
 
+# Docker export directory
+dist/
+
 # Test binary, built with `go test -c`
 *.test
 
