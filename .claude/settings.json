@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash",
+      "WebFetch",
+      "WebSearch",
+      "mcp__*",
+      "Skill"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./**/settings.json)",
+      "Read(./secrets/**)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+  ]
+}

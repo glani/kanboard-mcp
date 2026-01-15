@@ -4,25 +4,19 @@
 
 A powerful Go-based MCP server that enables seamless integration between AI assistants (like Claude Desktop, Cursor) and Kanboard project management system. Manage your Kanboard projects, tasks, users, and workflows directly through natural language commands.
 
-![Kanboard MCP Server Demo](new-project.gif)
-
 ![Go](https://img.shields.io/badge/Go-1.21+-blue?style=for-the-badge&logo=go)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 ![MCP](https://img.shields.io/badge/MCP-Protocol-orange?style=for-the-badge)
 ![Docker](https://img.shields.io/badge/Docker-Supported-blue?style=for-the-badge&logo=docker)
 
-⚠️ **Warning:** To avoid issues like these:
-
-![Proxy error example 1](https://github.com/user-attachments/assets/db9c0867-6cfd-4c30-831b-d2cc948a4ff5)
-![Proxy error example 2](https://github.com/user-attachments/assets/90a12994-62d1-426f-96af-c8fd63086884)
-
-We recommend using [mcpproxy](https://github.com/bivex/mcpproxy) as a proxy solution.
+> **Note:** This project was originally forked from [bivex/kanboard-mcp](https://github.com/bivex/kanboard-mcp) and is now maintained independently.
 
 
 ## 📋 Table of Contents
 
 - [✨ Features](#-features)
 - [🚀 Quick Start](#-quick-start)
+- [🌐 Transport Modes](#-transport-modes)
 - [🐳 Docker](#-docker)
 - [⚙️ Configuration](#️-configuration)
 - [🛠️ Available Tools](#️-available-tools)
@@ -38,8 +32,10 @@ We recommend using [mcpproxy](https://github.com/bivex/mcpproxy) as a proxy solu
 - 🔐 **Secure Authentication** - Support for both API key and username/password auth
 - ⚡ **High Performance** - Built with Go for optimal performance
 - 🎯 **MCP Standard** - Compatible with all MCP clients
+- 🌐 **Multi-Transport Support** - stdio, SSE, and Streamable HTTP transports
 - 🐳 **Docker Support** - Multi-architecture Docker images with Builder Pattern
 - 📦 **Binary Distribution** - Export static binaries for Linux (AMD64/ARM64)
+- 🚀 **Container Ready** - Designed for sidecar deployment in orchestrated environments
 
 ## 🚀 Quick Start
 
@@ -53,7 +49,7 @@ We recommend using [mcpproxy](https://github.com/bivex/mcpproxy) as a proxy solu
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/bivex/kanboard-mcp.git
+   git clone <repository-url>
    cd kanboard-mcp
    ```
 
@@ -83,15 +79,142 @@ We recommend using [mcpproxy](https://github.com/bivex/mcpproxy) as a proxy solu
    go build -ldflags="-s -w" -o kanboard-mcp .
    ```
 
+## 🌐 Transport Modes
+
+The Kanboard MCP Server supports multiple transport modes for different deployment scenarios:
+
+| Transport | Mode | Use Case | Endpoint |
+|-----------|------|----------|----------|
+| **stdio** | `--stdio` (default) | Local development, CLI tools | stdin/stdout |
+| **Streamable HTTP** | `--streamablehttp` | Container sidecars (recommended) | `http://host:port/mcp` |
+| **SSE** | `--sse` | Legacy HTTP clients | `http://host:port/sse` |
+
+### Transport Selection
+
+**Via Command-Line Flags:**
+```bash
+# stdio mode (default)
+./kanboard-mcp
+
+# SSE mode
+./kanboard-mcp --sse --port 8080
+
+# Streamable HTTP mode (recommended for containers)
+./kanboard-mcp --streamablehttp --port 8080
+./kanboard-mcp --http --port 8080  # alias
+```
+
+**Via Environment Variables:**
+```bash
+export MCP_MODE=streamablehttp  # or: stdio, sse
+export MCP_PORT=8080
+./kanboard-mcp
+```
+
+### MCP Client Configuration
+
+**Streamable HTTP (Recommended for containers):**
+```json
+{
+  "mcpServers": {
+    "kanboard": {
+      "type": "streamableHttp",
+      "url": "http://kanboard-mcp:8080/mcp"
+    }
+  }
+}
+```
+
+**SSE:**
+```json
+{
+  "mcpServers": {
+    "kanboard": {
+      "type": "sse",
+      "url": "http://kanboard-mcp:8080/sse"
+    }
+  }
+}
+```
+
+**stdio (Local):**
+```json
+{
+  "mcpServers": {
+    "kanboard": {
+      "command": "/path/to/kanboard-mcp",
+      "args": [],
+      "env": {
+        "KANBOARD_API_ENDPOINT": "https://your-kanboard/jsonrpc.php",
+        "KANBOARD_API_KEY": "your-api-key"
+      }
+    }
+  }
+}
+```
+
+### Sidecar Architecture
+
+For containerized deployments (Kubernetes, Docker Compose), use HTTP transports:
+
+```
+┌─────────────────┐   HTTP/SSE   ┌──────────────────────────┐
+│  AI Agent       │ ←──────────→ │  kanboard-mcp sidecar    │
+│  (Container A)  │              │                          │
+│  MCP Client     │              │  :8080/mcp               │
+└─────────────────┘              └──────────────────────────┘
+                                           │
+                                           ▼
+                                 ┌──────────────────────────┐
+                                 │  Kanboard Server         │
+                                 │  JSON-RPC API            │
+                                 └──────────────────────────┘
+```
+
 ## 🐳 Docker
 
 This project uses **Docker Builder Pattern** with Multi-Stage Build and Local Export to build the Kanboard MCP Server for Linux containers. This approach provides optimized, secure, and cross-platform builds.
 
 ### Quick Docker Start
 
+**Using run.sh helper script (recommended):**
+```bash
+# stdio mode (interactive)
+./run.sh
+
+# SSE mode on port 8080
+./run.sh --sse
+
+# Streamable HTTP mode (recommended for containers)
+./run.sh --http
+
+# Run in background
+./run.sh --http -d
+
+# Build and run
+./run.sh --build --http
+```
+
 **Run directly with Docker:**
 ```bash
+# stdio mode
 docker run --rm -it \
+  -e KANBOARD_API_ENDPOINT='https://your-kanboard-url/jsonrpc.php' \
+  -e KANBOARD_API_KEY='your-api-key' \
+  kanboard-mcp:latest
+
+# Streamable HTTP mode
+docker run --rm -d \
+  -p 8080:8080 \
+  -e MCP_MODE=streamablehttp \
+  -e KANBOARD_API_ENDPOINT='https://your-kanboard-url/jsonrpc.php' \
+  -e KANBOARD_API_KEY='your-api-key' \
+  kanboard-mcp:latest
+
+# SSE mode
+docker run --rm -d \
+  -p 8080:8080 \
+  -e MCP_MODE=sse \
   -e KANBOARD_API_ENDPOINT='https://your-kanboard-url/jsonrpc.php' \
   -e KANBOARD_API_KEY='your-api-key' \
   kanboard-mcp:latest
@@ -183,27 +306,57 @@ export KANBOARD_API_KEY='your-api-key'
 
 ### Docker Compose
 
-Create `docker-compose.yml`:
+The project includes a `docker-compose.yaml` with multiple transport configurations:
+
+```bash
+# Copy example environment file
+cp .env.example .env
+# Edit .env with your Kanboard credentials
+
+# Start SSE server (port 8081)
+docker-compose up mcp-sse
+
+# Start Streamable HTTP server (port 8082)
+docker-compose up mcp-http
+
+# Start stdio mode (interactive)
+docker-compose run --rm mcp-stdio
+
+# Start with Kanboard for full testing
+docker-compose --profile full up
+```
+
+**Available Services:**
+| Service | Transport | Port | Endpoint |
+|---------|-----------|------|----------|
+| `mcp-sse` | SSE | 8081 | `http://localhost:8081/sse` |
+| `mcp-http` | Streamable HTTP | 8082 | `http://localhost:8082/mcp` |
+| `mcp-stdio` | stdio | - | Interactive |
+| `kanboard` | - | 8080 | Web UI (profile: full) |
+
+**Custom docker-compose.yaml example:**
 
 ```yaml
 version: '3.8'
 services:
   kanboard-mcp:
-    build: .
+    build:
+      context: .
+      target: runtime
     container_name: kanboard-mcp
     restart: unless-stopped
+    ports:
+      - "8080:8080"
     environment:
+      - MCP_MODE=streamablehttp
+      - MCP_PORT=8080
       - KANBOARD_API_ENDPOINT=https://your-kanboard-url/jsonrpc.php
       - KANBOARD_API_KEY=your-api-key
-      - KANBOARD_USERNAME=your-username
-      - KANBOARD_PASSWORD=your-password
-    volumes:
-      - ./mcp-tools-config.yaml:/app/mcp-tools-config.yaml:ro
-```
-
-Run with:
-```bash
-docker-compose up -d
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 ```
 
 ### Advanced Docker Usage
@@ -838,7 +991,7 @@ You can attach files to projects and tasks in two ways:
 
 ```bash
 # Clone the repository
-git clone https://github.com/bivex/kanboard-mcp.git
+git clone <repository-url>
 cd kanboard-mcp
 
 # Install dependencies
@@ -885,10 +1038,12 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md
 
 <div align="center">
 
-**Made with ❤️ for the Kanboard community**
+## Part of Heretic Project
 
-[![GitHub stars](https://img.shields.io/github/stars/bivex/kanboard-mcp?style=social)](https://github.com/bivex/kanboard-mcp/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/bivex/kanboard-mcp?style=social)](https://github.com/bivex/kanboard-mcp/network)
-[![GitHub issues](https://img.shields.io/github/issues/bivex/kanboard-mcp)](https://github.com/bivex/kanboard-mcp/issues)
+This project is part of the **VibeCoder Heretic Project List** - a collection of AI-powered development tools and MCP servers.
+
+[![Heretic](images/heretic-favicon-256x256.png)](https://github.com/giglabo/vibecoder-heretic-project-list)
+
+[View the Heretic Project List](https://github.com/giglabo/vibecoder-heretic-project-list)
 
 </div>

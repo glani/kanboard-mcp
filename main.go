@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,19 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"gopkg.in/yaml.v3"
+)
+
+// Transport modes supported by the MCP server
+const (
+	TransportStdio          = "stdio"
+	TransportSSE            = "sse"
+	TransportStreamableHTTP = "streamablehttp"
+)
+
+// Version information (set via ldflags)
+var (
+	version   = "dev"
+	buildTime = ""
 )
 
 // RBAC Configuration embedded as JSON
@@ -893,6 +907,59 @@ func registerToolIfEnabled(toolName string, enabledTools map[string]bool, tool m
 }
 
 func main() {
+	// Parse command-line flags
+	var (
+		_                  = flag.Bool("stdio", false, "Use stdio transport (default)")
+		flagSSE            = flag.Bool("sse", false, "Use SSE transport")
+		flagStreamableHTTP = flag.Bool("streamablehttp", false, "Use Streamable HTTP transport")
+		flagHTTP           = flag.Bool("http", false, "Alias for --streamablehttp")
+		flagPort           = flag.String("port", "", "Port for HTTP/SSE transport (default: 8080)")
+		flagVersion        = flag.Bool("version", false, "Show version information")
+	)
+	flag.Parse()
+
+	// Handle version flag
+	if *flagVersion {
+		fmt.Printf("KanboardMCP version %s\n", version)
+		if buildTime != "" {
+			fmt.Printf("Build time: %s\n", buildTime)
+		}
+		os.Exit(0)
+	}
+
+	// Determine transport mode from flags or environment
+	transportMode := TransportStdio
+	if *flagSSE {
+		transportMode = TransportSSE
+	} else if *flagStreamableHTTP || *flagHTTP {
+		transportMode = TransportStreamableHTTP
+	} else if mode := os.Getenv("MCP_MODE"); mode != "" {
+		switch strings.ToLower(mode) {
+		case TransportSSE:
+			transportMode = TransportSSE
+		case TransportStreamableHTTP, "http":
+			transportMode = TransportStreamableHTTP
+		default:
+			transportMode = TransportStdio
+		}
+	}
+
+	// Determine port from flags or environment
+	port := "8080"
+	if *flagPort != "" {
+		port = *flagPort
+	} else if envPort := os.Getenv("MCP_PORT"); envPort != "" {
+		port = envPort
+	}
+
+	// Debug transport configuration
+	if os.Getenv("KANBOARD_DEBUG") == "true" {
+		fmt.Fprintf(os.Stderr, "DEBUG: Transport mode: %s\n", transportMode)
+		if transportMode != TransportStdio {
+			fmt.Fprintf(os.Stderr, "DEBUG: Port: %s\n", port)
+		}
+	}
+
 	// Load MCP tools configuration
 	configPath := os.Getenv("MCP_TOOLS_CONFIG")
 	if configPath == "" {
@@ -3106,10 +3173,95 @@ func main() {
 	)
 	registerToolIfEnabled("get_all_sprints_by_project", enabledTools, tool, kbClient.getAllSprintsByProjectHandler, s)
 
-	// Start the stdio server
-	if err := server.ServeStdio(s); err != nil {
-		fmt.Printf("Server error: %v\n", err)
+	// Start the server based on transport mode
+	startServer(s, transportMode, port)
+}
+
+// startServer starts the MCP server with the specified transport mode
+func startServer(s *server.MCPServer, transportMode string, port string) {
+	switch transportMode {
+	case TransportSSE:
+		startSSEServer(s, port)
+	case TransportStreamableHTTP:
+		startStreamableHTTPServer(s, port)
+	case TransportStdio:
+		fallthrough
+	default:
+		startStdioServer(s)
 	}
+}
+
+// startStdioServer starts the MCP server with stdio transport
+func startStdioServer(s *server.MCPServer) {
+	if os.Getenv("KANBOARD_DEBUG") == "true" {
+		fmt.Fprintf(os.Stderr, "DEBUG: Starting MCP server with stdio transport\n")
+	}
+	if err := server.ServeStdio(s); err != nil {
+		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// startSSEServer starts the MCP server with SSE (Server-Sent Events) transport
+func startSSEServer(s *server.MCPServer, port string) {
+	addr := ":" + port
+	if os.Getenv("KANBOARD_DEBUG") == "true" {
+		fmt.Fprintf(os.Stderr, "DEBUG: Starting MCP server with SSE transport on %s\n", addr)
+	}
+
+	sseServer := server.NewSSEServer(s)
+
+	// Create HTTP server with SSE handlers
+	mux := http.NewServeMux()
+	mux.HandleFunc("/sse", sseServer.ServeHTTP)
+	mux.HandleFunc("/message", sseServer.ServeHTTP)
+	mux.HandleFunc("/health", healthCheckHandler)
+
+	fmt.Fprintf(os.Stderr, "KanboardMCP SSE server listening on %s\n", addr)
+	fmt.Fprintf(os.Stderr, "  SSE endpoint: http://localhost%s/sse\n", addr)
+	fmt.Fprintf(os.Stderr, "  Message endpoint: http://localhost%s/message\n", addr)
+	fmt.Fprintf(os.Stderr, "  Health check: http://localhost%s/health\n", addr)
+
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		fmt.Fprintf(os.Stderr, "SSE server error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// startStreamableHTTPServer starts the MCP server with Streamable HTTP transport
+func startStreamableHTTPServer(s *server.MCPServer, port string) {
+	addr := ":" + port
+	if os.Getenv("KANBOARD_DEBUG") == "true" {
+		fmt.Fprintf(os.Stderr, "DEBUG: Starting MCP server with Streamable HTTP transport on %s\n", addr)
+	}
+
+	httpServer := server.NewStreamableHTTPServer(s)
+
+	// Create HTTP server with Streamable HTTP handlers
+	mux := http.NewServeMux()
+	mux.HandleFunc("/mcp", httpServer.ServeHTTP)
+	mux.HandleFunc("/health", healthCheckHandler)
+
+	fmt.Fprintf(os.Stderr, "KanboardMCP Streamable HTTP server listening on %s\n", addr)
+	fmt.Fprintf(os.Stderr, "  MCP endpoint: http://localhost%s/mcp\n", addr)
+	fmt.Fprintf(os.Stderr, "  Health check: http://localhost%s/health\n", addr)
+
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		fmt.Fprintf(os.Stderr, "HTTP server error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// healthCheckHandler provides a simple health check endpoint
+func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    "healthy",
+		"service":   "kanboard-mcp",
+		"version":   version,
+		"buildTime": buildTime,
+	})
 }
 
 type kanboardClient struct {

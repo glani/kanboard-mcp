@@ -1,6 +1,6 @@
 # =============================================================================
 # Multi-Stage Dockerfile for Kanboard MCP Server
-# Implements the Builder Pattern with Local Export
+# Supports multiple transport modes: stdio, SSE, Streamable HTTP
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -42,10 +42,52 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
 RUN ls -lh kanboard-mcp && file kanboard-mcp
 
 # -----------------------------------------------------------------------------
-# Stage 2: Runtime Image (Optional)
-# Minimal image to run the application if needed
+# Stage 2: Runtime Image
+# Alpine-based image for full transport support (stdio, SSE, HTTP)
 # -----------------------------------------------------------------------------
-FROM scratch AS runtime
+FROM alpine:3.21 AS runtime
+
+# Add labels for container metadata
+LABEL org.opencontainers.image.title="Kanboard MCP Server" \
+      org.opencontainers.image.description="MCP server for Kanboard integration with multi-transport support" \
+      org.opencontainers.image.source="https://github.com/bivex/kanboard-mcp" \
+      org.opencontainers.image.vendor="Bivex"
+
+# Install runtime dependencies
+RUN apk add --no-cache ca-certificates tzdata wget
+
+# Create app directory
+WORKDIR /app
+
+# Copy the binary from builder
+COPY --from=builder /build/kanboard-mcp /kanboard-mcp
+
+# Copy entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Copy config file if exists
+COPY mcp-tools-config.yaml /app/mcp-tools-config.yaml
+
+# Environment variables for transport configuration
+ENV MCP_MODE=stdio \
+    MCP_PORT=8080
+
+# Expose port for HTTP/SSE transports
+EXPOSE 8080
+
+# Health check (only effective for HTTP/SSE modes)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD if [ "$MCP_MODE" != "stdio" ]; then wget --no-verbose --tries=1 --spider http://localhost:${MCP_PORT}/health 2>/dev/null || exit 1; else exit 0; fi
+
+# Set the entrypoint
+ENTRYPOINT ["/entrypoint.sh"]
+
+# -----------------------------------------------------------------------------
+# Stage 3: Minimal Runtime (scratch-based for stdio only)
+# Use this for minimal image size when only stdio transport is needed
+# -----------------------------------------------------------------------------
+FROM scratch AS runtime-minimal
 
 # Copy the binary from builder
 COPY --from=builder /build/kanboard-mcp /kanboard-mcp
@@ -60,7 +102,7 @@ COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 ENTRYPOINT ["/kanboard-mcp"]
 
 # -----------------------------------------------------------------------------
-# Stage 3: Export
+# Stage 4: Export
 # This stage holds only the artifacts for local export
 # Uses FROM scratch to minimize the exported content
 # -----------------------------------------------------------------------------
@@ -76,4 +118,3 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 
 # No entrypoint - this is just for artifact export
-
