@@ -1,6 +1,10 @@
 # MCP Tools Configuration
 # This file controls which tools are exposed by the Kanboard MCP server
 # Tools are grouped by domain for better organization
+#
+# Note: The 'tool_search' tool is always enabled as core infrastructure
+# and is not subject to this configuration. It allows searching for
+# available tools using regex or BM25 keyword matching.
 
 # Domain: corerules
 # Tools specified in .cursorrules file - these are always enabled

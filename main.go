@@ -8,9 +8,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -887,23 +890,251 @@ type ToolRegistryFunc func(s *server.MCPServer, kbClient *kanboardClient)
 // ToolRegistry maps tool names to their registration functions
 type ToolRegistry map[string]ToolRegistryFunc
 
+// ToolInfo stores metadata about a registered tool for tool search
+type ToolInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// Global registry of all registered tools for tool search
+var registeredTools []ToolInfo
+
 // registerToolIfEnabled conditionally registers a tool if it's enabled in the config
 func registerToolIfEnabled(toolName string, enabledTools map[string]bool, tool mcp.Tool, handler func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error), s *server.MCPServer) {
+	// Extract description from tool for the registry
+	description := tool.Description
+
 	// If enabledTools is empty or nil, register all tools (backward compatibility)
 	if enabledTools == nil || len(enabledTools) == 0 {
 		s.AddTool(tool, handler)
+		registeredTools = append(registeredTools, ToolInfo{Name: toolName, Description: description})
 		return
 	}
 
 	// Check if tool is enabled
 	if enabled, exists := enabledTools[toolName]; exists && enabled {
 		s.AddTool(tool, handler)
+		registeredTools = append(registeredTools, ToolInfo{Name: toolName, Description: description})
 		if os.Getenv("KANBOARD_DEBUG") == "true" {
 			fmt.Fprintf(os.Stderr, "DEBUG: Registered tool: %s\n", toolName)
 		}
 	} else if os.Getenv("KANBOARD_DEBUG") == "true" {
 		fmt.Fprintf(os.Stderr, "DEBUG: Skipped tool (not enabled): %s\n", toolName)
 	}
+}
+
+// ToolSearchResult represents a search result with relevance score
+type ToolSearchResult struct {
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
+	Score       float64 `json:"score"`
+}
+
+// toolSearchHandler handles tool_search requests using regex or BM25 search
+func toolSearchHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	query, err := req.RequireString("query")
+	if err != nil {
+		return mcp.NewToolResultError("query parameter is required"), nil
+	}
+
+	searchType := req.GetString("search_type", "auto")
+	maxResults := req.GetInt("max_results", 10)
+
+	var results []ToolSearchResult
+
+	switch searchType {
+	case "regex":
+		results = searchToolsRegex(query, maxResults)
+	case "bm25":
+		results = searchToolsBM25(query, maxResults)
+	default: // "auto" - try regex first, fall back to BM25
+		results = searchToolsRegex(query, maxResults)
+		if len(results) == 0 {
+			results = searchToolsBM25(query, maxResults)
+		}
+	}
+
+	// Build response
+	response := map[string]interface{}{
+		"query":        query,
+		"search_type":  searchType,
+		"total_tools":  len(registeredTools),
+		"result_count": len(results),
+		"results":      results,
+	}
+
+	jsonResponse, err := json.MarshalIndent(response, "", "  ")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to format response: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(string(jsonResponse)), nil
+}
+
+// searchToolsRegex searches tools using regex pattern matching
+func searchToolsRegex(pattern string, maxResults int) []ToolSearchResult {
+	var results []ToolSearchResult
+
+	// Compile regex (case-insensitive)
+	re, err := regexp.Compile("(?i)" + pattern)
+	if err != nil {
+		// If pattern is invalid, treat it as a literal string search
+		pattern = regexp.QuoteMeta(pattern)
+		re, _ = regexp.Compile("(?i)" + pattern)
+	}
+
+	for _, tool := range registeredTools {
+		// Check if pattern matches name or description
+		nameMatch := re.MatchString(tool.Name)
+		descMatch := re.MatchString(tool.Description)
+
+		if nameMatch || descMatch {
+			score := 0.0
+			if nameMatch {
+				score += 1.0 // Higher score for name match
+			}
+			if descMatch {
+				score += 0.5 // Lower score for description match
+			}
+			results = append(results, ToolSearchResult{
+				Name:        tool.Name,
+				Description: tool.Description,
+				Score:       score,
+			})
+		}
+	}
+
+	// Sort by score descending
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score > results[j].Score
+	})
+
+	// Limit results
+	if len(results) > maxResults {
+		results = results[:maxResults]
+	}
+
+	return results
+}
+
+// searchToolsBM25 searches tools using BM25 algorithm for keyword relevance
+func searchToolsBM25(query string, maxResults int) []ToolSearchResult {
+	// Tokenize query
+	queryTerms := tokenize(query)
+	if len(queryTerms) == 0 {
+		return nil
+	}
+
+	// BM25 parameters
+	k1 := 1.2
+	b := 0.75
+
+	// Calculate average document length
+	totalLen := 0
+	for _, tool := range registeredTools {
+		totalLen += len(tokenize(tool.Name + " " + tool.Description))
+	}
+	avgDocLen := float64(totalLen) / float64(len(registeredTools))
+
+	// Calculate document frequencies for query terms
+	docFreq := make(map[string]int)
+	for _, term := range queryTerms {
+		for _, tool := range registeredTools {
+			docText := strings.ToLower(tool.Name + " " + tool.Description)
+			if strings.Contains(docText, term) {
+				docFreq[term]++
+			}
+		}
+	}
+
+	// Calculate BM25 scores
+	var results []ToolSearchResult
+	N := float64(len(registeredTools))
+
+	for _, tool := range registeredTools {
+		docText := tool.Name + " " + tool.Description
+		docTokens := tokenize(docText)
+		docLen := float64(len(docTokens))
+
+		// Count term frequencies in document
+		termFreq := make(map[string]int)
+		for _, token := range docTokens {
+			termFreq[token]++
+		}
+
+		// Calculate BM25 score
+		score := 0.0
+		for _, term := range queryTerms {
+			tf := float64(termFreq[term])
+			df := float64(docFreq[term])
+
+			if df == 0 {
+				continue
+			}
+
+			// IDF component
+			idf := math.Log((N - df + 0.5) / (df + 0.5))
+
+			// TF component with length normalization
+			tfNorm := (tf * (k1 + 1)) / (tf + k1*(1-b+b*(docLen/avgDocLen)))
+
+			score += idf * tfNorm
+		}
+
+		// Boost score if query matches tool name
+		nameLower := strings.ToLower(tool.Name)
+		for _, term := range queryTerms {
+			if strings.Contains(nameLower, term) {
+				score *= 1.5 // 50% boost for name matches
+				break
+			}
+		}
+
+		if score > 0 {
+			results = append(results, ToolSearchResult{
+				Name:        tool.Name,
+				Description: tool.Description,
+				Score:       score,
+			})
+		}
+	}
+
+	// Sort by score descending
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score > results[j].Score
+	})
+
+	// Limit results
+	if len(results) > maxResults {
+		results = results[:maxResults]
+	}
+
+	return results
+}
+
+// tokenize splits text into lowercase tokens
+func tokenize(text string) []string {
+	// Convert to lowercase and split on non-alphanumeric characters
+	text = strings.ToLower(text)
+	re := regexp.MustCompile(`[^a-z0-9]+`)
+	words := re.Split(text, -1)
+
+	// Filter empty strings and common stop words
+	stopWords := map[string]bool{
+		"a": true, "an": true, "the": true, "and": true, "or": true,
+		"is": true, "are": true, "was": true, "were": true, "be": true,
+		"to": true, "of": true, "in": true, "for": true, "on": true,
+		"with": true, "by": true, "from": true, "as": true, "at": true,
+	}
+
+	var tokens []string
+	for _, word := range words {
+		if word != "" && !stopWords[word] {
+			tokens = append(tokens, word)
+		}
+	}
+
+	return tokens
 }
 
 func main() {
@@ -1037,12 +1268,12 @@ func main() {
 	kbClient := newKanboardClient(apiEndpoint, apiKey, kbUsername, kbPassword, rbacManager)
 
 	tool = mcp.NewTool("get_projects",
-		mcp.WithDescription("List all projects"),
+		mcp.WithDescription("List all projects accessible to the current user with basic details (ID, name, status)"),
 	)
 	registerToolIfEnabled("get_projects", enabledTools, tool, kbClient.getProjectsHandler, s)
 
 	tool = mcp.NewTool("create_project",
-		mcp.WithDescription("Create new projects"),
+		mcp.WithDescription("Create a new project with name, identifier, description, and optional owner assignment"),
 		mcp.WithString("name",
 			mcp.Required(),
 			mcp.Description("Name of the project to create"),
@@ -1078,7 +1309,7 @@ func main() {
 	registerToolIfEnabled("create_project", enabledTools, tool, kbClient.createProjectHandler, s)
 
 	tool = mcp.NewTool("get_tasks",
-		mcp.WithDescription("Get project tasks"),
+		mcp.WithDescription("Get all tasks for a project with optional status filter (open/closed/all)"),
 		mcp.WithString("project_name",
 			mcp.Required(),
 			mcp.Description("Name of the project to get tasks from"),
@@ -1087,7 +1318,7 @@ func main() {
 	registerToolIfEnabled("get_tasks", enabledTools, tool, kbClient.getTasksHandler, s)
 
 	tool = mcp.NewTool("create_task",
-		mcp.WithDescription("Create new tasks"),
+		mcp.WithDescription("Create a new task with title, description, assignee, due date, color, category, and column placement"),
 		mcp.WithString("project_name",
 			mcp.Required(),
 			mcp.Description("Name of the project to add the task to"),
@@ -1171,7 +1402,7 @@ func main() {
 	registerToolIfEnabled("create_test_task", enabledTools, tool, kbClient.createTestTaskHandler, s)
 
 	tool = mcp.NewTool("update_task",
-		mcp.WithDescription("Update a task"),
+		mcp.WithDescription("Update task properties: title, description, assignee, due date, color, category, priority, or column"),
 		mcp.WithNumber("id",
 			mcp.Required(),
 			mcp.Description("ID of the task to update"),
@@ -1229,7 +1460,7 @@ func main() {
 	registerToolIfEnabled("update_task", enabledTools, tool, kbClient.updateTaskHandler, s)
 
 	tool = mcp.NewTool("delete_task",
-		mcp.WithDescription("Remove tasks"),
+		mcp.WithDescription("Permanently delete a task and all associated comments, files, and subtasks"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task to delete"),
@@ -1238,7 +1469,7 @@ func main() {
 	registerToolIfEnabled("delete_task", enabledTools, tool, kbClient.deleteTaskHandler, s)
 
 	tool = mcp.NewTool("get_task",
-		mcp.WithDescription("Get task by the unique id"),
+		mcp.WithDescription("Get complete task details by ID including metadata, tags, and time tracking info"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task to get details for"),
@@ -1272,12 +1503,12 @@ func main() {
 	registerToolIfEnabled("move_task_position", enabledTools, tool, kbClient.moveTaskPositionHandler, s)
 
 	tool = mcp.NewTool("get_users",
-		mcp.WithDescription("List all system users"),
+		mcp.WithDescription("List all users in the system including active and disabled accounts"),
 	)
 	registerToolIfEnabled("get_users", enabledTools, tool, kbClient.getUsersHandler, s)
 
 	tool = mcp.NewTool("create_user",
-		mcp.WithDescription("Create a new user"),
+		mcp.WithDescription("Create a new local user account with username, password, email, and role assignment"),
 		mcp.WithString("username",
 			mcp.Required(),
 			mcp.Description("Username for the new user (must be unique)"),
@@ -1299,7 +1530,7 @@ func main() {
 	registerToolIfEnabled("create_user", enabledTools, tool, kbClient.createUserHandler, s)
 
 	tool = mcp.NewTool("create_ldap_user",
-		mcp.WithDescription("Create a new user authenticated by LDAP"),
+		mcp.WithDescription("Create a user account linked to LDAP/Active Directory authentication"),
 		mcp.WithString("username",
 			mcp.Required(),
 			mcp.Description("Username for the LDAP user"),
@@ -1308,7 +1539,7 @@ func main() {
 	registerToolIfEnabled("create_ldap_user", enabledTools, tool, kbClient.createLdapUserHandler, s)
 
 	tool = mcp.NewTool("get_user",
-		mcp.WithDescription("Get user information by ID"),
+		mcp.WithDescription("Get user profile by ID including email, role, status, and group memberships"),
 		mcp.WithNumber("user_id",
 			mcp.Required(),
 			mcp.Description("ID of the user to retrieve"),
@@ -1317,7 +1548,7 @@ func main() {
 	registerToolIfEnabled("get_user", enabledTools, tool, kbClient.getUserHandler, s)
 
 	tool = mcp.NewTool("get_user_by_name",
-		mcp.WithDescription("Get user information by username"),
+		mcp.WithDescription("Get user profile by username including email, role, status, and group memberships"),
 		mcp.WithString("username",
 			mcp.Required(),
 			mcp.Description("Username of the user to retrieve"),
@@ -1326,7 +1557,7 @@ func main() {
 	registerToolIfEnabled("get_user_by_name", enabledTools, tool, kbClient.getUserByNameHandler, s)
 
 	tool = mcp.NewTool("update_user",
-		mcp.WithDescription("Update a user"),
+		mcp.WithDescription("Update user properties: name, email, password, role, or notification settings"),
 		mcp.WithNumber("id",
 			mcp.Required(),
 			mcp.Description("ID of the user to update"),
@@ -1347,7 +1578,7 @@ func main() {
 	registerToolIfEnabled("update_user", enabledTools, tool, kbClient.updateUserHandler, s)
 
 	tool = mcp.NewTool("remove_user",
-		mcp.WithDescription("Remove a user"),
+		mcp.WithDescription("Permanently delete a user account (tasks will be unassigned)"),
 		mcp.WithNumber("user_id",
 			mcp.Required(),
 			mcp.Description("ID of the user to remove"),
@@ -1356,7 +1587,7 @@ func main() {
 	registerToolIfEnabled("remove_user", enabledTools, tool, kbClient.removeUserHandler, s)
 
 	tool = mcp.NewTool("disable_user",
-		mcp.WithDescription("Disable a user"),
+		mcp.WithDescription("Deactivate a user account, preventing login while preserving task history"),
 		mcp.WithNumber("user_id",
 			mcp.Required(),
 			mcp.Description("ID of the user to disable"),
@@ -1365,7 +1596,7 @@ func main() {
 	registerToolIfEnabled("disable_user", enabledTools, tool, kbClient.disableUserHandler, s)
 
 	tool = mcp.NewTool("enable_user",
-		mcp.WithDescription("Enable a user"),
+		mcp.WithDescription("Reactivate a disabled user account, restoring login access"),
 		mcp.WithNumber("user_id",
 			mcp.Required(),
 			mcp.Description("ID of the user to enable"),
@@ -1374,7 +1605,7 @@ func main() {
 	registerToolIfEnabled("enable_user", enabledTools, tool, kbClient.enableUserHandler, s)
 
 	tool = mcp.NewTool("is_active_user",
-		mcp.WithDescription("Check if a user is active"),
+		mcp.WithDescription("Check if a user account is active (returns boolean)"),
 		mcp.WithNumber("user_id",
 			mcp.Required(),
 			mcp.Description("ID of the user to check"),
@@ -1383,7 +1614,7 @@ func main() {
 	registerToolIfEnabled("is_active_user", enabledTools, tool, kbClient.isActiveUserHandler, s)
 
 	tool = mcp.NewTool("assign_task",
-		mcp.WithDescription("Assign tasks to users"),
+		mcp.WithDescription("Assign or reassign a task to a user by user ID"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task to assign"),
@@ -1396,7 +1627,7 @@ func main() {
 	registerToolIfEnabled("assign_task", enabledTools, tool, kbClient.assignTaskHandler, s)
 
 	tool = mcp.NewTool("set_task_due_date",
-		mcp.WithDescription("Set task deadlines"),
+		mcp.WithDescription("Set or update a task's due date/deadline (ISO format or timestamp)"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task to set the due date for"),
@@ -1409,7 +1640,7 @@ func main() {
 	registerToolIfEnabled("set_task_due_date", enabledTools, tool, kbClient.setTaskDueDateHandler, s)
 
 	tool = mcp.NewTool("create_comment",
-		mcp.WithDescription("Create a new comment"),
+		mcp.WithDescription("Add a comment to a task for discussion, updates, or notes"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task to add a comment to"),
@@ -1432,7 +1663,7 @@ func main() {
 	registerToolIfEnabled("create_comment", enabledTools, tool, kbClient.createCommentHandler, s)
 
 	tool = mcp.NewTool("get_task_comments",
-		mcp.WithDescription("Get task comments"),
+		mcp.WithDescription("Get all comments on a task ordered by creation date"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task to get comments for"),
@@ -1441,7 +1672,7 @@ func main() {
 	registerToolIfEnabled("get_task_comments", enabledTools, tool, kbClient.getTaskCommentsHandler, s)
 
 	tool = mcp.NewTool("get_comment",
-		mcp.WithDescription("Get comment information"),
+		mcp.WithDescription("Get a single comment by ID including author and timestamp"),
 		mcp.WithNumber("comment_id",
 			mcp.Required(),
 			mcp.Description("ID of the comment to get details for"),
@@ -1450,7 +1681,7 @@ func main() {
 	registerToolIfEnabled("get_comment", enabledTools, tool, kbClient.getCommentHandler, s)
 
 	tool = mcp.NewTool("update_comment",
-		mcp.WithDescription("Update a comment"),
+		mcp.WithDescription("Edit an existing comment's text content"),
 		mcp.WithNumber("id",
 			mcp.Required(),
 			mcp.Description("ID of the comment to update"),
@@ -1463,7 +1694,7 @@ func main() {
 	registerToolIfEnabled("update_comment", enabledTools, tool, kbClient.updateCommentHandler, s)
 
 	tool = mcp.NewTool("remove_comment",
-		mcp.WithDescription("Remove a comment"),
+		mcp.WithDescription("Delete a comment from a task"),
 		mcp.WithNumber("comment_id",
 			mcp.Required(),
 			mcp.Description("ID of the comment to remove"),
@@ -1488,12 +1719,12 @@ func main() {
 	registerToolIfEnabled("assign_user_to_project", enabledTools, tool, kbClient.assignUserToProjectHandler, s)
 
 	tool = mcp.NewTool("get_me",
-		mcp.WithDescription("Get logged user session"),
+		mcp.WithDescription("Get current authenticated user's profile and session info"),
 	)
 	registerToolIfEnabled("get_me", enabledTools, tool, kbClient.getMeHandler, s)
 
 	tool = mcp.NewTool("get_my_dashboard",
-		mcp.WithDescription("Get the dashboard of the logged user without pagination"),
+		mcp.WithDescription("Get current user's dashboard with assigned tasks, projects, and activities"),
 	)
 	registerToolIfEnabled("get_my_dashboard", enabledTools, tool, kbClient.getMyDashboardHandler, s)
 
@@ -1515,12 +1746,12 @@ func main() {
 	registerToolIfEnabled("create_my_private_project", enabledTools, tool, kbClient.createMyPrivateProjectHandler, s)
 
 	tool = mcp.NewTool("get_my_projects_list",
-		mcp.WithDescription("Get projects of the connected user"),
+		mcp.WithDescription("Get list of projects the current user has access to (IDs and names only)"),
 	)
 	registerToolIfEnabled("get_my_projects_list", enabledTools, tool, kbClient.getMyProjectsListHandler, s)
 
 	tool = mcp.NewTool("get_my_overdue_tasks",
-		mcp.WithDescription("Get my overdue tasks"),
+		mcp.WithDescription("Get all overdue tasks assigned to the current user"),
 	)
 	registerToolIfEnabled("get_my_overdue_tasks", enabledTools, tool, kbClient.getMyOverdueTasksHandler, s)
 
@@ -1530,7 +1761,7 @@ func main() {
 	registerToolIfEnabled("get_my_projects", enabledTools, tool, kbClient.getMyProjectsHandler, s)
 
 	tool = mcp.NewTool("get_external_task_link_types",
-		mcp.WithDescription("Get all registered external link providers"),
+		mcp.WithDescription("Get available external link providers (GitHub, GitLab, web URLs, etc.)"),
 	)
 	registerToolIfEnabled("get_external_task_link_types", enabledTools, tool, kbClient.getExternalTaskLinkTypesHandler, s)
 
@@ -1544,7 +1775,7 @@ func main() {
 	registerToolIfEnabled("get_ext_link_provider_deps", enabledTools, tool, kbClient.getExternalTaskLinkProviderDependenciesHandler, s)
 
 	tool = mcp.NewTool("create_external_task_link",
-		mcp.WithDescription("Create a new external link"),
+		mcp.WithDescription("Attach an external URL or reference to a task (GitHub issue, GitLab MR, web link)"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task"),
@@ -1567,7 +1798,7 @@ func main() {
 	registerToolIfEnabled("create_external_task_link", enabledTools, tool, kbClient.createExternalTaskLinkHandler, s)
 
 	tool = mcp.NewTool("update_external_task_link",
-		mcp.WithDescription("Update external task link"),
+		mcp.WithDescription("Update an external link's URL, title, or type"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task"),
@@ -1588,7 +1819,7 @@ func main() {
 	registerToolIfEnabled("update_external_task_link", enabledTools, tool, kbClient.updateExternalTaskLinkHandler, s)
 
 	tool = mcp.NewTool("get_external_task_link_by_id",
-		mcp.WithDescription("Get an external task link by ID"),
+		mcp.WithDescription("Get external link details including URL, provider, and dependency info"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task"),
@@ -1600,7 +1831,7 @@ func main() {
 	registerToolIfEnabled("get_external_task_link_by_id", enabledTools, tool, kbClient.getExternalTaskLinkByIdHandler, s)
 
 	tool = mcp.NewTool("get_all_external_task_links",
-		mcp.WithDescription("Get all external links attached to a task"),
+		mcp.WithDescription("Get all external URLs and references attached to a task"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task to get external links for"),
@@ -1609,7 +1840,7 @@ func main() {
 	registerToolIfEnabled("get_all_external_task_links", enabledTools, tool, kbClient.getAllExternalTaskLinksHandler, s)
 
 	tool = mcp.NewTool("remove_external_task_link",
-		mcp.WithDescription("Remove an external link"),
+		mcp.WithDescription("Remove an external URL or reference from a task"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task"),
@@ -1622,7 +1853,7 @@ func main() {
 	registerToolIfEnabled("remove_external_task_link", enabledTools, tool, kbClient.removeExternalTaskLinkHandler, s)
 
 	tool = mcp.NewTool("get_columns",
-		mcp.WithDescription("List project columns"),
+		mcp.WithDescription("Get all board columns for a project (e.g., Backlog, In Progress, Done)"),
 		mcp.WithString("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to get columns from"),
@@ -1631,7 +1862,7 @@ func main() {
 	registerToolIfEnabled("get_columns", enabledTools, tool, kbClient.getColumnsHandler, s)
 
 	tool = mcp.NewTool("get_column",
-		mcp.WithDescription("Get a single column"),
+		mcp.WithDescription("Get column details by ID including title, position, and task limit"),
 		mcp.WithNumber("column_id",
 			mcp.Required(),
 			mcp.Description("ID of the column to get details for"),
@@ -1640,7 +1871,7 @@ func main() {
 	registerToolIfEnabled("get_column", enabledTools, tool, kbClient.getColumnHandler, s)
 
 	tool = mcp.NewTool("create_column",
-		mcp.WithDescription("Add new columns"),
+		mcp.WithDescription("Add a new board column to a project with title and optional task limit"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to add the column to"),
@@ -1659,7 +1890,7 @@ func main() {
 	registerToolIfEnabled("create_column", enabledTools, tool, kbClient.createColumnHandler, s)
 
 	tool = mcp.NewTool("update_column",
-		mcp.WithDescription("Modify column settings"),
+		mcp.WithDescription("Update column properties: title, task limit, or description"),
 		mcp.WithNumber("column_id",
 			mcp.Required(),
 			mcp.Description("ID of the column to update"),
@@ -1678,7 +1909,7 @@ func main() {
 	registerToolIfEnabled("update_column", enabledTools, tool, kbClient.updateColumnHandler, s)
 
 	tool = mcp.NewTool("delete_column",
-		mcp.WithDescription("Remove columns"),
+		mcp.WithDescription("Delete a board column (tasks must be moved first)"),
 		mcp.WithNumber("column_id",
 			mcp.Required(),
 			mcp.Description("ID of the column to delete"),
@@ -1687,7 +1918,7 @@ func main() {
 	registerToolIfEnabled("delete_column", enabledTools, tool, kbClient.deleteColumnHandler, s)
 
 	tool = mcp.NewTool("reorder_columns",
-		mcp.WithDescription("Change column positions"),
+		mcp.WithDescription("Reorder board columns by specifying new position for a column"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project containing the columns"),
@@ -1704,7 +1935,7 @@ func main() {
 	registerToolIfEnabled("reorder_columns", enabledTools, tool, kbClient.reorderColumnsHandler, s)
 
 	tool = mcp.NewTool("get_categories",
-		mcp.WithDescription("List project categories"),
+		mcp.WithDescription("Get all task categories defined for a project"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to get categories from"),
@@ -1713,7 +1944,7 @@ func main() {
 	registerToolIfEnabled("get_categories", enabledTools, tool, kbClient.getCategoriesHandler, s)
 
 	tool = mcp.NewTool("create_category",
-		mcp.WithDescription("Add task categories"),
+		mcp.WithDescription("Create a new task category for a project with name and optional color"),
 		mcp.WithString("name",
 			mcp.Required(),
 			mcp.Description("Name of the category to create"),
@@ -1729,7 +1960,7 @@ func main() {
 	registerToolIfEnabled("create_category", enabledTools, tool, kbClient.createCategoryHandler, s)
 
 	tool = mcp.NewTool("get_category",
-		mcp.WithDescription("Get category information"),
+		mcp.WithDescription("Get category details by ID including name, color, and project association"),
 		mcp.WithNumber("category_id",
 			mcp.Required(),
 			mcp.Description("ID of the category to get details for"),
@@ -1738,7 +1969,7 @@ func main() {
 	registerToolIfEnabled("get_category", enabledTools, tool, kbClient.getCategoryHandler, s)
 
 	tool = mcp.NewTool("update_category",
-		mcp.WithDescription("Modify categories"),
+		mcp.WithDescription("Update category name or color"),
 		mcp.WithNumber("category_id",
 			mcp.Required(),
 			mcp.Description("ID of the category to update"),
@@ -1753,7 +1984,7 @@ func main() {
 	registerToolIfEnabled("update_category", enabledTools, tool, kbClient.updateCategoryHandler, s)
 
 	tool = mcp.NewTool("delete_category",
-		mcp.WithDescription("Remove categories"),
+		mcp.WithDescription("Delete a category (tasks will be uncategorized)"),
 		mcp.WithNumber("category_id",
 			mcp.Required(),
 			mcp.Description("ID of the category to delete"),
@@ -1780,7 +2011,7 @@ func main() {
 	registerToolIfEnabled("get_active_swimlanes", enabledTools, tool, kbClient.getActiveSwimlanesHandler, s)
 
 	tool = mcp.NewTool("get_swimlane",
-		mcp.WithDescription("Get a swimlane by ID"),
+		mcp.WithDescription("Get swimlane details by ID including name, description, and position"),
 		mcp.WithNumber("swimlane_id",
 			mcp.Required(),
 			mcp.Description("ID of the swimlane to retrieve"),
@@ -1789,7 +2020,7 @@ func main() {
 	registerToolIfEnabled("get_swimlane", enabledTools, tool, kbClient.getSwimlaneHandler, s)
 
 	tool = mcp.NewTool("get_swimlane_by_id",
-		mcp.WithDescription("Get a swimlane by ID"),
+		mcp.WithDescription("Get swimlane details by ID including name, description, and position"),
 		mcp.WithNumber("swimlane_id",
 			mcp.Required(),
 			mcp.Description("ID of the swimlane to retrieve"),
@@ -1798,7 +2029,7 @@ func main() {
 	registerToolIfEnabled("get_swimlane_by_id", enabledTools, tool, kbClient.getSwimlaneByIdHandler, s)
 
 	tool = mcp.NewTool("get_swimlane_by_name",
-		mcp.WithDescription("Get a swimlane by name"),
+		mcp.WithDescription("Get swimlane details by exact name match within a project"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project the swimlane belongs to"),
@@ -1811,7 +2042,7 @@ func main() {
 	registerToolIfEnabled("get_swimlane_by_name", enabledTools, tool, kbClient.getSwimlaneByNameHandler, s)
 
 	tool = mcp.NewTool("change_swimlane_position",
-		mcp.WithDescription("Move a swimlane's position"),
+		mcp.WithDescription("Reorder swimlane by setting new position (affects board layout)"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project containing the swimlane"),
@@ -1828,7 +2059,7 @@ func main() {
 	registerToolIfEnabled("change_swimlane_position", enabledTools, tool, kbClient.changeSwimlanePositionHandler, s)
 
 	tool = mcp.NewTool("create_swimlane",
-		mcp.WithDescription("Add a new swimlane"),
+		mcp.WithDescription("Create a new horizontal swimlane for task organization (e.g., by team, priority, or epic)"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to add the swimlane to"),
@@ -1844,7 +2075,7 @@ func main() {
 	registerToolIfEnabled("create_swimlane", enabledTools, tool, kbClient.addSwimlaneHandler, s)
 
 	tool = mcp.NewTool("update_swimlane",
-		mcp.WithDescription("Update swimlane properties"),
+		mcp.WithDescription("Update swimlane name or description"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project the swimlane belongs to"),
@@ -1863,7 +2094,7 @@ func main() {
 	registerToolIfEnabled("update_swimlane", enabledTools, tool, kbClient.updateSwimlaneHandler, s)
 
 	tool = mcp.NewTool("remove_swimlane",
-		mcp.WithDescription("Remove a swimlane"),
+		mcp.WithDescription("Delete a swimlane (tasks will move to default swimlane)"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project the swimlane belongs to"),
@@ -1876,7 +2107,7 @@ func main() {
 	registerToolIfEnabled("remove_swimlane", enabledTools, tool, kbClient.removeSwimlaneHandler, s)
 
 	tool = mcp.NewTool("disable_swimlane",
-		mcp.WithDescription("Disable a swimlane"),
+		mcp.WithDescription("Hide a swimlane from the board while preserving its tasks"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project the swimlane belongs to"),
@@ -1889,7 +2120,7 @@ func main() {
 	registerToolIfEnabled("disable_swimlane", enabledTools, tool, kbClient.disableSwimlaneHandler, s)
 
 	tool = mcp.NewTool("enable_swimlane",
-		mcp.WithDescription("Enable a swimlane"),
+		mcp.WithDescription("Show a previously disabled swimlane on the board"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project the swimlane belongs to"),
@@ -1934,7 +2165,7 @@ func main() {
 	registerToolIfEnabled("get_task_metadata_by_name", enabledTools, tool, kbClient.getTaskMetadataByNameHandler, s)
 
 	tool = mcp.NewTool("save_task_metadata",
-		mcp.WithDescription("Save/update task metadata"),
+		mcp.WithDescription("Save or update custom metadata key-value pair on a task"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task to save/update metadata for"),
@@ -1947,7 +2178,7 @@ func main() {
 	registerToolIfEnabled("save_task_metadata", enabledTools, tool, kbClient.saveTaskMetadataHandler, s)
 
 	tool = mcp.NewTool("remove_task_metadata",
-		mcp.WithDescription("Remove task metadata by name"),
+		mcp.WithDescription("Delete a custom metadata field from a task by key name"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task to remove metadata from"),
@@ -1960,7 +2191,7 @@ func main() {
 	registerToolIfEnabled("remove_task_metadata", enabledTools, tool, kbClient.removeTaskMetadataHandler, s)
 
 	tool = mcp.NewTool("create_group",
-		mcp.WithDescription("Create a new group"),
+		mcp.WithDescription("Create a new user group for bulk permission management"),
 		mcp.WithString("name",
 			mcp.Required(),
 			mcp.Description("Name of the group to create"),
@@ -1972,7 +2203,7 @@ func main() {
 	registerToolIfEnabled("create_group", enabledTools, tool, kbClient.createGroupHandler, s)
 
 	tool = mcp.NewTool("update_group",
-		mcp.WithDescription("Update a group"),
+		mcp.WithDescription("Update group name or external ID"),
 		mcp.WithNumber("group_id",
 			mcp.Required(),
 			mcp.Description("ID of the group to update"),
@@ -1987,7 +2218,7 @@ func main() {
 	registerToolIfEnabled("update_group", enabledTools, tool, kbClient.updateGroupHandler, s)
 
 	tool = mcp.NewTool("remove_group",
-		mcp.WithDescription("Remove a group"),
+		mcp.WithDescription("Delete a group (users remain but lose group-based permissions)"),
 		mcp.WithNumber("group_id",
 			mcp.Required(),
 			mcp.Description("ID of the group to remove"),
@@ -1996,7 +2227,7 @@ func main() {
 	registerToolIfEnabled("remove_group", enabledTools, tool, kbClient.removeGroupHandler, s)
 
 	tool = mcp.NewTool("get_group",
-		mcp.WithDescription("Get one group"),
+		mcp.WithDescription("Get group details by ID including name and member count"),
 		mcp.WithNumber("group_id",
 			mcp.Required(),
 			mcp.Description("ID of the group to retrieve"),
@@ -2005,12 +2236,12 @@ func main() {
 	registerToolIfEnabled("get_group", enabledTools, tool, kbClient.getGroupHandler, s)
 
 	tool = mcp.NewTool("get_all_groups",
-		mcp.WithDescription("Get all groups"),
+		mcp.WithDescription("Get all user groups in the system"),
 	)
 	registerToolIfEnabled("get_all_groups", enabledTools, tool, kbClient.getAllGroupsHandler, s)
 
 	tool = mcp.NewTool("get_member_groups",
-		mcp.WithDescription("Get all groups for a given user"),
+		mcp.WithDescription("Get all groups that a specific user belongs to"),
 		mcp.WithNumber("user_id",
 			mcp.Required(),
 			mcp.Description("ID of the user"),
@@ -2019,7 +2250,7 @@ func main() {
 	registerToolIfEnabled("get_member_groups", enabledTools, tool, kbClient.getMemberGroupsHandler, s)
 
 	tool = mcp.NewTool("get_group_members",
-		mcp.WithDescription("Get all members of a group"),
+		mcp.WithDescription("Get list of all users in a group"),
 		mcp.WithNumber("group_id",
 			mcp.Required(),
 			mcp.Description("ID of the group"),
@@ -2028,7 +2259,7 @@ func main() {
 	registerToolIfEnabled("get_group_members", enabledTools, tool, kbClient.getGroupMembersHandler, s)
 
 	tool = mcp.NewTool("add_group_member",
-		mcp.WithDescription("Add a user to a group"),
+		mcp.WithDescription("Add a user to a group for shared permissions"),
 		mcp.WithNumber("group_id",
 			mcp.Required(),
 			mcp.Description("ID of the group"),
@@ -2041,7 +2272,7 @@ func main() {
 	registerToolIfEnabled("add_group_member", enabledTools, tool, kbClient.addGroupMemberHandler, s)
 
 	tool = mcp.NewTool("remove_group_member",
-		mcp.WithDescription("Remove a user from a group"),
+		mcp.WithDescription("Remove a user from a group (revokes group-based permissions)"),
 		mcp.WithNumber("group_id",
 			mcp.Required(),
 			mcp.Description("ID of the group")),
@@ -2053,7 +2284,7 @@ func main() {
 	registerToolIfEnabled("remove_group_member", enabledTools, tool, kbClient.removeGroupMemberHandler, s)
 
 	tool = mcp.NewTool("is_group_member",
-		mcp.WithDescription("Check if a user is member of a group"),
+		mcp.WithDescription("Check if a user belongs to a specific group (returns boolean)"),
 		mcp.WithNumber("group_id",
 			mcp.Required(),
 			mcp.Description("ID of the group"),
@@ -2066,7 +2297,7 @@ func main() {
 	registerToolIfEnabled("is_group_member", enabledTools, tool, kbClient.isGroupMemberHandler, s)
 
 	tool = mcp.NewTool("create_task_link",
-		mcp.WithDescription("Create a link between two tasks"),
+		mcp.WithDescription("Create a relationship between two tasks (blocks, is blocked by, relates to, etc.)"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the first task"),
@@ -2083,7 +2314,7 @@ func main() {
 	registerToolIfEnabled("create_task_link", enabledTools, tool, kbClient.createTaskLinkHandler, s)
 
 	tool = mcp.NewTool("update_task_link",
-		mcp.WithDescription("Update task link"),
+		mcp.WithDescription("Update the relationship type between two linked tasks"),
 		mcp.WithNumber("task_link_id",
 			mcp.Required(),
 			mcp.Description("ID of the task link to update"),
@@ -2104,7 +2335,7 @@ func main() {
 	registerToolIfEnabled("update_task_link", enabledTools, tool, kbClient.updateTaskLinkHandler, s)
 
 	tool = mcp.NewTool("get_task_link_by_id",
-		mcp.WithDescription("Get a task link by ID"),
+		mcp.WithDescription("Get task link details including source task, target task, and relationship type"),
 		mcp.WithNumber("task_link_id",
 			mcp.Required(),
 			mcp.Description("ID of the task link to retrieve"),
@@ -2113,7 +2344,7 @@ func main() {
 	registerToolIfEnabled("get_task_link_by_id", enabledTools, tool, kbClient.getTaskLinkByIdHandler, s)
 
 	tool = mcp.NewTool("get_all_task_links",
-		mcp.WithDescription("Get all links related to a task"),
+		mcp.WithDescription("Get all task relationships (dependencies, blockers, related tasks) for a task"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task to get links for"),
@@ -2132,12 +2363,12 @@ func main() {
 
 	// Link Management
 	tool = mcp.NewTool("get_all_links",
-		mcp.WithDescription("Get the list of possible relations between tasks"),
+		mcp.WithDescription("Get all available task relationship types (e.g., blocks/blocked by, parent/child)"),
 	)
 	registerToolIfEnabled("get_all_links", enabledTools, tool, kbClient.getAllLinksHandler, s)
 
 	tool = mcp.NewTool("get_opposite_link_id",
-		mcp.WithDescription("Get the opposite link id of a task link"),
+		mcp.WithDescription("Get the reverse relationship ID (e.g., 'blocked by' for 'blocks')"),
 		mcp.WithNumber("link_id",
 			mcp.Required(),
 			mcp.Description("ID of the link to get the opposite ID for"),
@@ -2146,7 +2377,7 @@ func main() {
 	registerToolIfEnabled("get_opposite_link_id", enabledTools, tool, kbClient.getOppositeLinkIdHandler, s)
 
 	tool = mcp.NewTool("get_link_by_label",
-		mcp.WithDescription("Get a link by label"),
+		mcp.WithDescription("Get task relationship type by its label name (e.g., 'blocks', 'relates to')"),
 		mcp.WithString("label",
 			mcp.Required(),
 			mcp.Description("Label of the link to retrieve"),
@@ -2155,7 +2386,7 @@ func main() {
 	registerToolIfEnabled("get_link_by_label", enabledTools, tool, kbClient.getLinkByLabelHandler, s)
 
 	tool = mcp.NewTool("get_link_by_id",
-		mcp.WithDescription("Get a link by id"),
+		mcp.WithDescription("Get task relationship type definition by ID"),
 		mcp.WithNumber("link_id",
 			mcp.Required(),
 			mcp.Description("ID of the link to retrieve"),
@@ -2164,7 +2395,7 @@ func main() {
 	registerToolIfEnabled("get_link_by_id", enabledTools, tool, kbClient.getLinkByIdHandler, s)
 
 	tool = mcp.NewTool("create_link",
-		mcp.WithDescription("Create a new task relation"),
+		mcp.WithDescription("Define a new task relationship type with label and opposite label"),
 		mcp.WithString("label",
 			mcp.Required(),
 			mcp.Description("Label of the new link"),
@@ -2176,7 +2407,7 @@ func main() {
 	registerToolIfEnabled("create_link", enabledTools, tool, kbClient.createLinkHandler, s)
 
 	tool = mcp.NewTool("update_link",
-		mcp.WithDescription("Update a link"),
+		mcp.WithDescription("Update a task relationship type definition"),
 		mcp.WithNumber("link_id",
 			mcp.Required(),
 			mcp.Description("ID of the link to update"),
@@ -2193,7 +2424,7 @@ func main() {
 	registerToolIfEnabled("update_link", enabledTools, tool, kbClient.updateLinkHandler, s)
 
 	tool = mcp.NewTool("remove_link",
-		mcp.WithDescription("Remove a link"),
+		mcp.WithDescription("Delete a task relationship type definition"),
 		mcp.WithNumber("link_id",
 			mcp.Required(),
 			mcp.Description("ID of the link to remove"),
@@ -2204,7 +2435,7 @@ func main() {
 	// Project Management
 
 	tool = mcp.NewTool("get_project_by_id",
-		mcp.WithDescription("Get project information by ID"),
+		mcp.WithDescription("Get detailed project information by ID including settings, members count, and configuration"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to retrieve"),
@@ -2213,7 +2444,7 @@ func main() {
 	registerToolIfEnabled("get_project_by_id", enabledTools, tool, kbClient.getProjectByIdHandler, s)
 
 	tool = mcp.NewTool("get_project_by_name",
-		mcp.WithDescription("Get project information by name"),
+		mcp.WithDescription("Get detailed project information by exact name match"),
 		mcp.WithString("name",
 			mcp.Required(),
 			mcp.Description("Name of the project to retrieve"),
@@ -2222,7 +2453,7 @@ func main() {
 	registerToolIfEnabled("get_project_by_name", enabledTools, tool, kbClient.getProjectByNameHandler, s)
 
 	tool = mcp.NewTool("get_project_by_identifier",
-		mcp.WithDescription("Get project information by identifier"),
+		mcp.WithDescription("Get detailed project information by unique project identifier/slug"),
 		mcp.WithString("identifier",
 			mcp.Required(),
 			mcp.Description("Identifier of the project to retrieve"),
@@ -2231,7 +2462,7 @@ func main() {
 	registerToolIfEnabled("get_project_by_identifier", enabledTools, tool, kbClient.getProjectByIdentifierHandler, s)
 
 	tool = mcp.NewTool("get_project_by_email",
-		mcp.WithDescription("Get project information by email"),
+		mcp.WithDescription("Get project information associated with a specific email address"),
 		mcp.WithString("email",
 			mcp.Required(),
 			mcp.Description("Email of the project to retrieve"),
@@ -2240,12 +2471,12 @@ func main() {
 	registerToolIfEnabled("get_project_by_email", enabledTools, tool, kbClient.getProjectByEmailHandler, s)
 
 	tool = mcp.NewTool("get_all_projects",
-		mcp.WithDescription("Get all available projects"),
+		mcp.WithDescription("Get all projects in the system (admin only) with full details"),
 	)
 	registerToolIfEnabled("get_all_projects", enabledTools, tool, kbClient.getAllProjectsHandler, s)
 
 	tool = mcp.NewTool("update_project",
-		mcp.WithDescription("Update a project"),
+		mcp.WithDescription("Update project properties including name, description, identifier, owner, and settings"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to update"),
@@ -2284,7 +2515,7 @@ func main() {
 	registerToolIfEnabled("update_project", enabledTools, tool, kbClient.updateProjectHandler, s)
 
 	tool = mcp.NewTool("remove_project",
-		mcp.WithDescription("Remove a project"),
+		mcp.WithDescription("Permanently delete a project and all associated tasks, files, and history"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to remove"),
@@ -2293,7 +2524,7 @@ func main() {
 	registerToolIfEnabled("remove_project", enabledTools, tool, kbClient.removeProjectHandler, s)
 
 	tool = mcp.NewTool("enable_project",
-		mcp.WithDescription("Enable a project"),
+		mcp.WithDescription("Activate a disabled project, making it visible and accessible to members"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to enable"),
@@ -2302,7 +2533,7 @@ func main() {
 	registerToolIfEnabled("enable_project", enabledTools, tool, kbClient.enableProjectHandler, s)
 
 	tool = mcp.NewTool("disable_project",
-		mcp.WithDescription("Disable a project"),
+		mcp.WithDescription("Deactivate a project, hiding it from users while preserving all data"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to disable"),
@@ -2311,7 +2542,7 @@ func main() {
 	registerToolIfEnabled("disable_project", enabledTools, tool, kbClient.disableProjectHandler, s)
 
 	tool = mcp.NewTool("enable_project_public_access",
-		mcp.WithDescription("Enable public access for a given project"),
+		mcp.WithDescription("Enable public read-only access to a project board via shareable URL"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to enable public access for"),
@@ -2320,7 +2551,7 @@ func main() {
 	registerToolIfEnabled("enable_project_public_access", enabledTools, tool, kbClient.enableProjectPublicAccessHandler, s)
 
 	tool = mcp.NewTool("disable_project_public_access",
-		mcp.WithDescription("Disable public access for a given project"),
+		mcp.WithDescription("Disable public URL access, making the project private to members only"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to disable public access for"),
@@ -2329,7 +2560,7 @@ func main() {
 	registerToolIfEnabled("disable_project_public_access", enabledTools, tool, kbClient.disableProjectPublicAccessHandler, s)
 
 	tool = mcp.NewTool("get_project_activity",
-		mcp.WithDescription("Get activity stream for a project"),
+		mcp.WithDescription("Get recent activity events for a project (task changes, comments, file uploads)"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to get activity for"),
@@ -2338,7 +2569,7 @@ func main() {
 	registerToolIfEnabled("get_project_activity", enabledTools, tool, kbClient.getProjectActivityHandler, s)
 
 	tool = mcp.NewTool("get_project_activities",
-		mcp.WithDescription("Get Activityfeed for Project(s)"),
+		mcp.WithDescription("Get paginated activity feed for one or more projects with filtering options"),
 		mcp.WithArray("project_ids",
 			mcp.Required(),
 			mcp.WithNumberItems(),
@@ -2349,7 +2580,7 @@ func main() {
 
 	// Project File Management
 	tool = mcp.NewTool("create_project_file",
-		mcp.WithDescription("Create and upload a new project attachment"),
+		mcp.WithDescription("Upload and attach a file to a project (base64 encoded content)"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to attach the file to"),
@@ -2365,7 +2596,7 @@ func main() {
 	registerToolIfEnabled("create_project_file", enabledTools, tool, kbClient.createProjectFileHandler, s)
 
 	tool = mcp.NewTool("get_all_project_files",
-		mcp.WithDescription("Get all files attached to a project"),
+		mcp.WithDescription("Get list of all file attachments on a project"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to get files from"),
@@ -2374,7 +2605,7 @@ func main() {
 	registerToolIfEnabled("get_all_project_files", enabledTools, tool, kbClient.getAllProjectFilesHandler, s)
 
 	tool = mcp.NewTool("get_project_file",
-		mcp.WithDescription("Get file information"),
+		mcp.WithDescription("Get project file attachment metadata (name, size, upload date) by ID"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project"),
@@ -2403,7 +2634,7 @@ func main() {
 	registerToolIfEnabled("download_project_file", enabledTools, tool, kbClient.downloadProjectFileHandler, s)
 
 	tool = mcp.NewTool("remove_project_file",
-		mcp.WithDescription("Remove a file associated to a project"),
+		mcp.WithDescription("Delete a file attachment from a project"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project"),
@@ -2416,7 +2647,7 @@ func main() {
 	registerToolIfEnabled("remove_project_file", enabledTools, tool, kbClient.removeProjectFileHandler, s)
 
 	tool = mcp.NewTool("remove_all_project_files",
-		mcp.WithDescription("Remove all files associated to a project"),
+		mcp.WithDescription("Delete all file attachments from a project"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to remove all files from"),
@@ -2426,7 +2657,7 @@ func main() {
 
 	// Project Metadata Management
 	tool = mcp.NewTool("get_project_metadata",
-		mcp.WithDescription("Get Project metadata"),
+		mcp.WithDescription("Get all custom metadata key-value pairs for a project"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to get metadata from"),
@@ -2435,7 +2666,7 @@ func main() {
 	registerToolIfEnabled("get_project_metadata", enabledTools, tool, kbClient.getProjectMetadataHandler, s)
 
 	tool = mcp.NewTool("get_project_metadata_by_name",
-		mcp.WithDescription("Fetch single metadata value"),
+		mcp.WithDescription("Get a single project metadata value by key name"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project"),
@@ -2448,7 +2679,7 @@ func main() {
 	registerToolIfEnabled("get_project_metadata_by_name", enabledTools, tool, kbClient.getProjectMetadataByNameHandler, s)
 
 	tool = mcp.NewTool("save_project_metadata",
-		mcp.WithDescription("Add or update metadata"),
+		mcp.WithDescription("Save or update custom metadata key-value pair on a project"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project"),
@@ -2461,7 +2692,7 @@ func main() {
 	registerToolIfEnabled("save_project_metadata", enabledTools, tool, kbClient.saveProjectMetadataHandler, s)
 
 	tool = mcp.NewTool("remove_project_metadata",
-		mcp.WithDescription("Remove a project metadata"),
+		mcp.WithDescription("Delete a custom metadata field from a project by key name"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project"),
@@ -2475,7 +2706,7 @@ func main() {
 
 	// Project Permission Management
 	tool = mcp.NewTool("get_project_users",
-		mcp.WithDescription("Get all members of a project"),
+		mcp.WithDescription("Get all users with access to a project and their roles"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to get users from"),
@@ -2554,7 +2785,7 @@ func main() {
 	registerToolIfEnabled("remove_project_group", enabledTools, tool, kbClient.removeProjectGroupHandler, s)
 
 	tool = mcp.NewTool("change_project_user_role",
-		mcp.WithDescription("Change role of a user for a project"),
+		mcp.WithDescription("Change a user's role in a project (manager, member, or viewer)"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project"),
@@ -2571,7 +2802,7 @@ func main() {
 	registerToolIfEnabled("change_project_user_role", enabledTools, tool, kbClient.changeProjectUserRoleHandler, s)
 
 	tool = mcp.NewTool("change_project_group_role",
-		mcp.WithDescription("Change role of a group for a project"),
+		mcp.WithDescription("Change a group's role in a project (manager, member, or viewer)"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project"),
@@ -2588,7 +2819,7 @@ func main() {
 	registerToolIfEnabled("change_project_group_role", enabledTools, tool, kbClient.changeProjectGroupRoleHandler, s)
 
 	tool = mcp.NewTool("get_project_user_role",
-		mcp.WithDescription("Get the role of a user for a given project"),
+		mcp.WithDescription("Get a user's current role (manager, member, viewer) in a project"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project"),
@@ -2602,7 +2833,7 @@ func main() {
 
 	// Subtask Management
 	tool = mcp.NewTool("create_subtask",
-		mcp.WithDescription("Create a new subtask"),
+		mcp.WithDescription("Create a subtask/checklist item within a task with title, assignee, and time estimate"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task to associate the subtask with"),
@@ -2627,7 +2858,7 @@ func main() {
 	registerToolIfEnabled("create_subtask", enabledTools, tool, kbClient.createSubtaskHandler, s)
 
 	tool = mcp.NewTool("get_subtask",
-		mcp.WithDescription("Get subtask information"),
+		mcp.WithDescription("Get subtask details including status, assignee, and time tracking"),
 		mcp.WithNumber("subtask_id",
 			mcp.Required(),
 			mcp.Description("ID of the subtask to retrieve"),
@@ -2636,7 +2867,7 @@ func main() {
 	registerToolIfEnabled("get_subtask", enabledTools, tool, kbClient.getSubtaskHandler, s)
 
 	tool = mcp.NewTool("get_all_subtasks",
-		mcp.WithDescription("Get all available subtasks for a task"),
+		mcp.WithDescription("Get all subtasks/checklist items for a task"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task to get subtasks for"),
@@ -2645,7 +2876,7 @@ func main() {
 	registerToolIfEnabled("get_all_subtasks", enabledTools, tool, kbClient.getAllSubtasksHandler, s)
 
 	tool = mcp.NewTool("update_subtask",
-		mcp.WithDescription("Update a subtask"),
+		mcp.WithDescription("Update subtask title, status, assignee, or time estimate"),
 		mcp.WithNumber("id",
 			mcp.Required(),
 			mcp.Description("ID of the subtask to update"),
@@ -2673,7 +2904,7 @@ func main() {
 	registerToolIfEnabled("update_subtask", enabledTools, tool, kbClient.updateSubtaskHandler, s)
 
 	tool = mcp.NewTool("remove_subtask",
-		mcp.WithDescription("Remove a subtask"),
+		mcp.WithDescription("Delete a subtask from a task"),
 		mcp.WithNumber("subtask_id",
 			mcp.Required(),
 			mcp.Description("ID of the subtask to remove"),
@@ -2695,7 +2926,7 @@ func main() {
 	registerToolIfEnabled("has_subtask_timer", enabledTools, tool, kbClient.hasSubtaskTimerHandler, s)
 
 	tool = mcp.NewTool("set_subtask_start_time",
-		mcp.WithDescription("Start subtask timer for a user"),
+		mcp.WithDescription("Start time tracking timer for a subtask (for logging work hours)"),
 		mcp.WithNumber("subtask_id",
 			mcp.Required(),
 			mcp.Description("ID of the subtask"),
@@ -2707,7 +2938,7 @@ func main() {
 	registerToolIfEnabled("set_subtask_start_time", enabledTools, tool, kbClient.setSubtaskStartTimeHandler, s)
 
 	tool = mcp.NewTool("set_subtask_end_time",
-		mcp.WithDescription("Stop subtask timer for a user"),
+		mcp.WithDescription("Stop time tracking timer for a subtask and log elapsed time"),
 		mcp.WithNumber("subtask_id",
 			mcp.Required(),
 			mcp.Description("ID of the subtask"),
@@ -2719,7 +2950,7 @@ func main() {
 	registerToolIfEnabled("set_subtask_end_time", enabledTools, tool, kbClient.setSubtaskEndTimeHandler, s)
 
 	tool = mcp.NewTool("get_subtask_time_spent",
-		mcp.WithDescription("Get time spent on a subtask for a user"),
+		mcp.WithDescription("Get total time logged on a subtask by a specific user"),
 		mcp.WithNumber("subtask_id",
 			mcp.Required(),
 			mcp.Description("ID of the subtask"),
@@ -2732,12 +2963,12 @@ func main() {
 
 	// Tag Management
 	tool = mcp.NewTool("get_all_tags",
-		mcp.WithDescription("Get all tags"),
+		mcp.WithDescription("Get all tags defined in the system (global tags)"),
 	)
 	registerToolIfEnabled("get_all_tags", enabledTools, tool, kbClient.getAllTagsHandler, s)
 
 	tool = mcp.NewTool("get_tags_by_project",
-		mcp.WithDescription("Get all tags for a given project"),
+		mcp.WithDescription("Get all tags available for a specific project"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to get tags for"),
@@ -2746,7 +2977,7 @@ func main() {
 	registerToolIfEnabled("get_tags_by_project", enabledTools, tool, kbClient.getTagsByProjectHandler, s)
 
 	tool = mcp.NewTool("create_tag",
-		mcp.WithDescription("Create a new tag"),
+		mcp.WithDescription("Create a new tag for labeling and filtering tasks"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to associate the tag with"),
@@ -2762,7 +2993,7 @@ func main() {
 	registerToolIfEnabled("create_tag", enabledTools, tool, kbClient.createTagHandler, s)
 
 	tool = mcp.NewTool("update_tag",
-		mcp.WithDescription("Rename a tag"),
+		mcp.WithDescription("Rename an existing tag (updates all tagged tasks)"),
 		mcp.WithNumber("tag_id",
 			mcp.Required(),
 			mcp.Description("ID of the tag to update"),
@@ -2778,7 +3009,7 @@ func main() {
 	registerToolIfEnabled("update_tag", enabledTools, tool, kbClient.updateTagHandler, s)
 
 	tool = mcp.NewTool("remove_tag",
-		mcp.WithDescription("Remove a tag"),
+		mcp.WithDescription("Delete a tag (removes from all tasks)"),
 		mcp.WithNumber("tag_id",
 			mcp.Required(),
 			mcp.Description("ID of the tag to remove"),
@@ -2805,7 +3036,7 @@ func main() {
 	registerToolIfEnabled("set_task_tags", enabledTools, tool, kbClient.setTaskTagsHandler, s)
 
 	tool = mcp.NewTool("get_task_tags",
-		mcp.WithDescription("Get assigned tags to a task"),
+		mcp.WithDescription("Get all tags currently assigned to a task"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task"),
@@ -2814,7 +3045,7 @@ func main() {
 	registerToolIfEnabled("get_task_tags", enabledTools, tool, kbClient.getTaskTagsHandler, s)
 
 	tool = mcp.NewTool("create_task_file",
-		mcp.WithDescription("Create and upload a new task attachment"),
+		mcp.WithDescription("Upload and attach a file to a task (base64 encoded content)"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("The project ID"),
@@ -2834,7 +3065,7 @@ func main() {
 	registerToolIfEnabled("create_task_file", enabledTools, tool, kbClient.createTaskFileHandler, s)
 
 	tool = mcp.NewTool("get_all_task_files",
-		mcp.WithDescription("Get all files attached to task"),
+		mcp.WithDescription("Get list of all file attachments on a task"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("The task ID"),
@@ -2843,7 +3074,7 @@ func main() {
 	registerToolIfEnabled("get_all_task_files", enabledTools, tool, kbClient.getAllTaskFilesHandler, s)
 
 	tool = mcp.NewTool("get_task_file",
-		mcp.WithDescription("Get file information"),
+		mcp.WithDescription("Get file attachment metadata (name, size, upload date) by ID"),
 		mcp.WithNumber("file_id",
 			mcp.Required(),
 			mcp.Description("The file ID"),
@@ -2864,7 +3095,7 @@ func main() {
 	registerToolIfEnabled("download_task_file", enabledTools, tool, kbClient.downloadTaskFileHandler, s)
 
 	tool = mcp.NewTool("remove_task_file",
-		mcp.WithDescription("Remove file"),
+		mcp.WithDescription("Delete a file attachment from a task"),
 		mcp.WithNumber("file_id",
 			mcp.Required(),
 			mcp.Description("The file ID"),
@@ -2873,7 +3104,7 @@ func main() {
 	registerToolIfEnabled("remove_task_file", enabledTools, tool, kbClient.removeTaskFileHandler, s)
 
 	tool = mcp.NewTool("remove_all_task_files",
-		mcp.WithDescription("Remove all files associated to a task"),
+		mcp.WithDescription("Delete all file attachments from a task"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("The task ID"),
@@ -2883,53 +3114,53 @@ func main() {
 
 	// Application API Procedures
 	tool = mcp.NewTool("get_version",
-		mcp.WithDescription("Get the application version"),
+		mcp.WithDescription("Get Kanboard application version number"),
 	)
 	registerToolIfEnabled("get_version", enabledTools, tool, kbClient.getVersionHandler, s)
 
 	tool = mcp.NewTool("get_timezone",
-		mcp.WithDescription("Get the timezone of the connected user"),
+		mcp.WithDescription("Get the timezone setting for the current user's session"),
 	)
 	registerToolIfEnabled("get_timezone", enabledTools, tool, kbClient.getTimezoneHandler, s)
 
 	tool = mcp.NewTool("get_default_task_colors",
-		mcp.WithDescription("Get all default task colors"),
+		mcp.WithDescription("Get all available task color options with hex values and names"),
 	)
 	registerToolIfEnabled("get_default_task_colors", enabledTools, tool, kbClient.getDefaultTaskColorsHandler, s)
 
 	tool = mcp.NewTool("get_default_task_color",
-		mcp.WithDescription("Get default task color"),
+		mcp.WithDescription("Get the system default color applied to new tasks"),
 	)
 	registerToolIfEnabled("get_default_task_color", enabledTools, tool, kbClient.getDefaultTaskColorHandler, s)
 
 	tool = mcp.NewTool("get_color_list",
-		mcp.WithDescription("Get the list of task colors"),
+		mcp.WithDescription("Get mapping of color IDs to color names for task coloring"),
 	)
 	registerToolIfEnabled("get_color_list", enabledTools, tool, kbClient.getColorListHandler, s)
 
 	tool = mcp.NewTool("get_application_roles",
-		mcp.WithDescription("Get the application roles"),
+		mcp.WithDescription("Get available system-wide roles (admin, manager, user)"),
 	)
 	registerToolIfEnabled("get_application_roles", enabledTools, tool, kbClient.getApplicationRolesHandler, s)
 
 	tool = mcp.NewTool("get_project_roles",
-		mcp.WithDescription("Get the project roles"),
+		mcp.WithDescription("Get available project-level roles (manager, member, viewer)"),
 	)
 	registerToolIfEnabled("get_project_roles", enabledTools, tool, kbClient.getProjectRolesHandler, s)
 
 	// Automatic Actions API Procedures
 	tool = mcp.NewTool("get_available_actions",
-		mcp.WithDescription("Get list of available automatic actions"),
+		mcp.WithDescription("Get all automation actions available (auto-assign, auto-close, notifications, etc.)"),
 	)
 	registerToolIfEnabled("get_available_actions", enabledTools, tool, kbClient.getAvailableActionsHandler, s)
 
 	tool = mcp.NewTool("get_available_action_events",
-		mcp.WithDescription("Get list of available events for actions"),
+		mcp.WithDescription("Get all trigger events that can start automations (task created, moved, etc.)"),
 	)
 	registerToolIfEnabled("get_available_action_events", enabledTools, tool, kbClient.getAvailableActionEventsHandler, s)
 
 	tool = mcp.NewTool("get_compatible_action_events",
-		mcp.WithDescription("Get list of events compatible with an action"),
+		mcp.WithDescription("Get trigger events compatible with a specific automation action"),
 		mcp.WithString("action_name",
 			mcp.Required(),
 			mcp.Description("Action name"),
@@ -2938,7 +3169,7 @@ func main() {
 	registerToolIfEnabled("get_compatible_action_events", enabledTools, tool, kbClient.getCompatibleActionEventsHandler, s)
 
 	tool = mcp.NewTool("get_actions",
-		mcp.WithDescription("Get list of actions for a project"),
+		mcp.WithDescription("Get all configured automation rules for a project"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("Project ID"),
@@ -2947,7 +3178,7 @@ func main() {
 	registerToolIfEnabled("get_actions", enabledTools, tool, kbClient.getActionsHandler, s)
 
 	tool = mcp.NewTool("create_action",
-		mcp.WithDescription("Create an action"),
+		mcp.WithDescription("Create a new automation rule for a project (trigger + action + parameters)"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("Project ID"),
@@ -2968,7 +3199,7 @@ func main() {
 	registerToolIfEnabled("create_action", enabledTools, tool, kbClient.createActionHandler, s)
 
 	tool = mcp.NewTool("remove_action",
-		mcp.WithDescription("Remove an action"),
+		mcp.WithDescription("Delete an automation rule from a project"),
 		mcp.WithNumber("action_id",
 			mcp.Required(),
 			mcp.Description("Action ID"),
@@ -2977,7 +3208,7 @@ func main() {
 	registerToolIfEnabled("remove_action", enabledTools, tool, kbClient.removeActionHandler, s)
 
 	tool = mcp.NewTool("get_task_by_reference",
-		mcp.WithDescription("Get task by the external reference"),
+		mcp.WithDescription("Get task by external reference ID (for integration with external systems like GitHub/GitLab)"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project"),
@@ -2990,7 +3221,7 @@ func main() {
 	registerToolIfEnabled("get_task_by_reference", enabledTools, tool, kbClient.getTaskByReferenceHandler, s)
 
 	tool = mcp.NewTool("get_all_tasks",
-		mcp.WithDescription("Get all available tasks"),
+		mcp.WithDescription("Get all tasks across all projects (admin only) with optional status and project filters"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to get tasks from"),
@@ -3003,12 +3234,12 @@ func main() {
 	registerToolIfEnabled("get_all_tasks", enabledTools, tool, kbClient.getAllTasksHandler, s)
 
 	tool = mcp.NewTool("get_overdue_tasks",
-		mcp.WithDescription("Get all overdue tasks"),
+		mcp.WithDescription("Get all tasks past their due date across all accessible projects"),
 	)
 	registerToolIfEnabled("get_overdue_tasks", enabledTools, tool, kbClient.getOverdueTasksHandler, s)
 
 	tool = mcp.NewTool("get_overdue_tasks_by_project",
-		mcp.WithDescription("Get all overdue tasks for a special project"),
+		mcp.WithDescription("Get all tasks past their due date for a specific project"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project"),
@@ -3017,7 +3248,7 @@ func main() {
 	registerToolIfEnabled("get_overdue_tasks_by_project", enabledTools, tool, kbClient.getOverdueTasksByProjectHandler, s)
 
 	tool = mcp.NewTool("open_task",
-		mcp.WithDescription("Set a task to the status open"),
+		mcp.WithDescription("Reopen a closed task, setting status back to open/active"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task to open"),
@@ -3026,7 +3257,7 @@ func main() {
 	registerToolIfEnabled("open_task", enabledTools, tool, kbClient.openTaskHandler, s)
 
 	tool = mcp.NewTool("close_task",
-		mcp.WithDescription("Set a task to the status close"),
+		mcp.WithDescription("Close/complete a task, marking it as done"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task to close"),
@@ -3035,7 +3266,7 @@ func main() {
 	registerToolIfEnabled("close_task", enabledTools, tool, kbClient.closeTaskHandler, s)
 
 	tool = mcp.NewTool("move_task_to_project",
-		mcp.WithDescription("Move a task to another project"),
+		mcp.WithDescription("Move a task to a different project, specifying target column and swimlane"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task to move"),
@@ -3060,7 +3291,7 @@ func main() {
 	registerToolIfEnabled("move_task_to_project", enabledTools, tool, kbClient.moveTaskToProjectHandler, s)
 
 	tool = mcp.NewTool("duplicate_task_to_project",
-		mcp.WithDescription("Duplicate a task to another project"),
+		mcp.WithDescription("Copy a task to another project with optional inclusion of subtasks, comments, and files"),
 		mcp.WithNumber("task_id",
 			mcp.Required(),
 			mcp.Description("ID of the task to duplicate"),
@@ -3085,7 +3316,7 @@ func main() {
 	registerToolIfEnabled("duplicate_task_to_project", enabledTools, tool, kbClient.duplicateTaskToProjectHandler, s)
 
 	tool = mcp.NewTool("search_tasks",
-		mcp.WithDescription("Find tasks by using the search engine"),
+		mcp.WithDescription("Search tasks using Kanboard query syntax (supports: assignee, status, due date, category, tag filters)"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to search tasks in"),
@@ -3099,7 +3330,7 @@ func main() {
 
 	// ScrumSprint Plugin API
 	tool = mcp.NewTool("create_sprint",
-		mcp.WithDescription("Create a new sprint."),
+		mcp.WithDescription("Create a new sprint/iteration for agile project management with start and end dates"),
 		mcp.WithNumber("project_id",
 			mcp.Required(),
 			mcp.Description("ID of the project to create the sprint in"),
@@ -3120,7 +3351,7 @@ func main() {
 	registerToolIfEnabled("create_sprint", enabledTools, tool, kbClient.createSprintHandler, s)
 
 	tool = mcp.NewTool("get_sprint_by_id",
-		mcp.WithDescription("Retrieve a sprint by its ID."),
+		mcp.WithDescription("Get sprint details including dates, status, and associated tasks"),
 		mcp.WithNumber("sprint_id",
 			mcp.Required(),
 			mcp.Description("ID of the sprint to retrieve"),
@@ -3129,7 +3360,7 @@ func main() {
 	registerToolIfEnabled("get_sprint_by_id", enabledTools, tool, kbClient.getSprintByIdHandler, s)
 
 	tool = mcp.NewTool("update_sprint",
-		mcp.WithDescription("Update an existing sprint."),
+		mcp.WithDescription("Update sprint name, dates, or status"),
 		mcp.WithNumber("sprint_id",
 			mcp.Required(),
 			mcp.Description("ID of the sprint to update"),
@@ -3156,7 +3387,7 @@ func main() {
 	registerToolIfEnabled("update_sprint", enabledTools, tool, kbClient.updateSprintHandler, s)
 
 	tool = mcp.NewTool("remove_sprint",
-		mcp.WithDescription("Remove a sprint by its ID."),
+		mcp.WithDescription("Delete a sprint (tasks remain but lose sprint association)"),
 		mcp.WithNumber("sprint_id",
 			mcp.Required(),
 			mcp.Description("ID of the sprint to remove"),
@@ -3172,6 +3403,28 @@ func main() {
 		),
 	)
 	registerToolIfEnabled("get_all_sprints_by_project", enabledTools, tool, kbClient.getAllSprintsByProjectHandler, s)
+
+	// Tool Search - always enabled as a core infrastructure tool
+	tool = mcp.NewTool("tool_search",
+		mcp.WithDescription("Search for available tools by name or description using regex or BM25 keyword matching"),
+		mcp.WithString("query",
+			mcp.Required(),
+			mcp.Description("Search query - can be a regex pattern or keywords to find relevant tools"),
+		),
+		mcp.WithString("search_type",
+			mcp.Description("Search algorithm: 'regex' for pattern matching, 'bm25' for keyword relevance, 'auto' tries regex first then BM25 (default: auto)"),
+		),
+		mcp.WithNumber("max_results",
+			mcp.Description("Maximum number of results to return (default: 10)"),
+		),
+	)
+	// Tool search is always registered (not subject to config) as it's infrastructure
+	s.AddTool(tool, toolSearchHandler)
+	registeredTools = append(registeredTools, ToolInfo{Name: "tool_search", Description: tool.Description})
+
+	if os.Getenv("KANBOARD_DEBUG") == "true" {
+		fmt.Fprintf(os.Stderr, "DEBUG: Total tools registered: %d\n", len(registeredTools))
+	}
 
 	// Start the server based on transport mode
 	startServer(s, transportMode, port)

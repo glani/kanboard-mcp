@@ -15,6 +15,7 @@ A powerful Go-based MCP server that enables seamless integration between AI assi
 ## 📋 Table of Contents
 
 - [✨ Features](#-features)
+- [🔍 Tool Search (Claude Code Integration)](#-tool-search-claude-code-integration)
 - [🚀 Quick Start](#-quick-start)
 - [🌐 Transport Modes](#-transport-modes)
 - [🐳 Docker](#-docker)
@@ -36,6 +37,116 @@ A powerful Go-based MCP server that enables seamless integration between AI assi
 - 🐳 **Docker Support** - Multi-architecture Docker images with Builder Pattern
 - 📦 **Binary Distribution** - Export static binaries for Linux (AMD64/ARM64)
 - 🚀 **Container Ready** - Designed for sidecar deployment in orchestrated environments
+- 🔍 **Tool Search** - Built-in tool discovery with regex and BM25 search algorithms
+
+## 🔍 Tool Search (Claude Code Integration)
+
+This MCP server includes a built-in `tool_search` tool that enables dynamic tool discovery, compatible with [Claude's Tool Search feature](https://docs.anthropic.com/en/docs/build-with-claude/tool-use/tool-search-tool).
+
+### Why Tool Search?
+
+With 137+ available tools, loading all tools upfront can:
+- Consume significant context tokens
+- Overwhelm the model with too many options
+- Slow down tool selection
+
+Tool Search solves this by allowing Claude to discover relevant tools on-demand.
+
+### The `tool_search` Tool
+
+The `tool_search` tool is **always enabled** (not subject to configuration) and provides:
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | Yes | Search pattern or keywords |
+| `search_type` | string | No | `regex`, `bm25`, or `auto` (default) |
+| `max_results` | number | No | Maximum results to return (default: 10) |
+
+### Search Algorithms
+
+| Algorithm | Best For | Example Query |
+|-----------|----------|---------------|
+| **regex** | Exact pattern matching | `create.*task`, `get_project` |
+| **bm25** | Keyword relevance | `assign user to project`, `upload file` |
+| **auto** | General use (tries regex, falls back to BM25) | Any query |
+
+### Example Usage
+
+**Search for task-related tools:**
+```
+Use tool_search with query "task" to find all task management tools
+```
+
+**Response:**
+```json
+{
+  "query": "task",
+  "search_type": "auto",
+  "total_tools": 138,
+  "result_count": 10,
+  "results": [
+    {
+      "name": "create_task",
+      "description": "Create a new task with title, description, assignee, due date, color, category, and column placement",
+      "score": 1.5
+    },
+    {
+      "name": "update_task",
+      "description": "Update task properties: title, description, assignee, due date, color, category, priority, or column",
+      "score": 1.5
+    },
+    ...
+  ]
+}
+```
+
+**Search with regex pattern:**
+```
+Use tool_search with query "get_.*_by_id" and search_type "regex"
+```
+
+**Search with BM25 for semantic matching:**
+```
+Use tool_search with query "upload file attachment" and search_type "bm25"
+```
+
+### Integration with Claude Code
+
+When using Claude Code with this MCP server, you can leverage tool search for efficient workflows:
+
+1. **Ask Claude to find relevant tools:**
+   ```
+   What tools are available for managing project files?
+   ```
+   Claude will use `tool_search` to discover `create_project_file`, `get_all_project_files`, etc.
+
+2. **Discover tools by action:**
+   ```
+   How can I assign a user to a task?
+   ```
+   Claude will search for assignment-related tools and find `assign_task`.
+
+3. **Explore available functionality:**
+   ```
+   What sprint management tools are available?
+   ```
+   Claude will find all sprint-related tools from the ScrumSprint plugin.
+
+### Optimized Tool Descriptions
+
+All 137+ tools have been optimized with rich descriptions to improve search accuracy:
+
+- **Keywords**: Each description includes relevant action verbs and nouns
+- **Parameters**: Descriptions mention key parameters (e.g., "base64 encoded content")
+- **Context**: Descriptions explain the purpose (e.g., "for integration with external systems like GitHub/GitLab")
+- **Return values**: Where applicable, descriptions note return types (e.g., "returns boolean")
+
+**Example optimized descriptions:**
+| Tool | Description |
+|------|-------------|
+| `create_task` | Create a new task with title, description, assignee, due date, color, category, and column placement |
+| `search_tasks` | Search tasks using Kanboard query syntax (supports: assignee, status, due date, category, tag filters) |
+| `get_task_by_reference` | Get task by external reference ID (for integration with external systems like GitHub/GitLab) |
 
 ## 🚀 Quick Start
 
